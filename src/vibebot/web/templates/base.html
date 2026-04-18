@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}vibebot{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
+</head>
+<body>
+  <header>
+    <h1><a href="/">vibebot</a></h1>
+    <nav>
+      <a href="#networks">Networks</a>
+      <a href="#modules">Modules</a>
+      <a href="#repos">Repos</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>Set an API token in <code>localStorage.vibebot_token</code> to populate panels.</small>
+  </footer>
+  <script src="{{ url_for('static', path='app.js') }}"></script>
+</body>
+</html>

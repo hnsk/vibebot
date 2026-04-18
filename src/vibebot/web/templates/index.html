@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section id="networks">
+  <h2>Networks</h2>
+  <div data-api="/api/networks" data-template="network"></div>
+</section>
+
+<section id="send">
+  <h2>Send message</h2>
+  <form id="send-form">
+    <label>Network <input name="network" required></label>
+    <label>Target <input name="target" placeholder="#channel or nick" required></label>
+    <label>Message <input name="message" required></label>
+    <button type="submit">Send</button>
+  </form>
+</section>
+
+<section id="modules">
+  <h2>Modules</h2>
+  <div data-api="/api/modules" data-template="module"></div>
+</section>
+
+<section id="repos">
+  <h2>Module repositories</h2>
+  <div data-api="/api/repos" data-template="repo"></div>
+  <form id="repo-form">
+    <label>Name <input name="name" required></label>
+    <label>URL <input name="url" required></label>
+    <label>Branch <input name="branch" value="main"></label>
+    <button type="submit">Add</button>
+  </form>
+</section>
+
+<section id="events">
+  <h2>Live events</h2>
+  <pre id="events-log" aria-live="polite"></pre>
+</section>
+{% endblock %}

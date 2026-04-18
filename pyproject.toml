@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vibebot"
+version = "0.1.0"
+description = "Modular multi-server IRC bot with API, web, and TUI interfaces."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "vibebot contributors" }]
+dependencies = [
+    "pydle>=0.10",
+    "aiosqlite>=0.20",
+    "sqlalchemy[asyncio]>=2.0",
+    "apscheduler>=3.10",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "textual>=0.60",
+    "httpx>=0.27",
+    "gitpython>=3.1",
+    "pydantic>=2.6",
+    "click>=8.1",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.9",
+]
+
+[project.scripts]
+vibebot = "vibebot.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vibebot"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true

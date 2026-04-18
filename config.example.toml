@@ -1,0 +1,36 @@
+# vibebot example configuration.
+# Copy to config.toml and edit.
+
+[bot]
+# Where vibebot stores its SQLite database.
+database = "data/vibebot.db"
+# Where module git repos are cloned.
+modules_dir = "data/modules"
+log_level = "INFO"
+
+[api]
+host = "127.0.0.1"
+port = 8080
+# Tokens permitted to call the API. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+tokens = ["change-me-please"]
+
+# One [[networks]] section per IRC server.
+[[networks]]
+name = "libera"
+host = "irc.libera.chat"
+port = 6697
+tls = true
+nick = "vibebot"
+username = "vibebot"
+realname = "vibebot"
+channels = ["#vibebot-test"]
+# Optional SASL.
+# sasl_username = ""
+# sasl_password = ""
+
+# One [[repos]] section per module source repository.
+[[repos]]
+name = "builtin-extra"
+url = "https://github.com/example/vibebot-modules.git"
+branch = "main"
+enabled = false
