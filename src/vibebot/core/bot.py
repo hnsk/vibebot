@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 from contextlib import suppress
+from typing import Any
 
 from vibebot.config import Config
 from vibebot.core.acl import AclService
@@ -37,6 +38,7 @@ class VibeBot:
 
         self._stop = asyncio.Event()
         self._api_task: asyncio.Task[None] | None = None
+        self._api_server: Any = None
 
     async def run(self) -> None:
         await self.db.create_all()
@@ -70,8 +72,12 @@ class VibeBot:
             port=self.config.api.port,
             log_level=self.config.bot.log_level.lower(),
             lifespan="on",
+            # VibeBot owns signal handling; otherwise uvicorn cancels its own
+            # lifespan task on SIGINT and starlette logs a CancelledError trace.
+            install_signal_handlers=False,
         )
         server = uvicorn.Server(cfg)
+        self._api_server = server
         await server.serve()
 
     def _install_signal_handlers(self) -> None:
@@ -89,7 +95,10 @@ class VibeBot:
             await conn.stop()
         await self.scheduler.stop()
         if self._api_task is not None:
-            self._api_task.cancel()
+            if self._api_server is not None:
+                self._api_server.should_exit = True
+            else:
+                self._api_task.cancel()
             with suppress(BaseException):
                 await self._api_task
         await self.db.close()

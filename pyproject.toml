@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "vibebot contributors" }]
 dependencies = [
     "pydle>=0.10",
+    "pure-sasl>=0.6",
     "aiosqlite>=0.20",
     "sqlalchemy[asyncio]>=2.0",
     "apscheduler>=3.10",

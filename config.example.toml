@@ -14,19 +14,81 @@ port = 8080
 # Tokens permitted to call the API. Generate with: python -c 'import secrets; print(secrets.token_urlsafe(32))'
 tokens = ["change-me-please"]
 
-# One [[networks]] section per IRC server.
+# ---------------------------------------------------------------------------
+# Networks
+#
+# Minimum: name, host, port, tls, nick. Everything else has sensible defaults.
+#
+# protocol:
+#   "ircv3"   (default) — modern CAP/IRCv3 negotiation. Works on Ergo, Libera,
+#                         OFTC, and any server that tolerates `CAP LS`. SASL lives here.
+#   "rfc1459"           — skip CAP entirely. Use for legacy daemons that mishandle CAP.
+#
+# auth (optional, omit for anonymous):
+#   method = "none"     — no auth (default)
+#   method = "sasl"     — SASL via IRCv3. mechanism = PLAIN | EXTERNAL | SCRAM-SHA-256
+#   method = "q"        — QuakeNet Q bot (PRIVMSG + MODE +x)
+#   method = "nickserv" — generic NickServ-style PRIVMSG
+#
+# `required = true` on any auth method disconnects the bot on auth failure.
+# Default is `required = false`: log warning and stay connected.
+# ---------------------------------------------------------------------------
+
+# Modern network with SASL PLAIN (Libera, Ergo, etc.).
 [[networks]]
 name = "libera"
 host = "irc.libera.chat"
 port = 6697
 tls = true
 nick = "vibebot"
-username = "vibebot"
-realname = "vibebot"
 channels = ["#vibebot-test"]
-# Optional SASL.
-# sasl_username = ""
-# sasl_password = ""
+
+  [networks.auth]
+  method = "sasl"
+  mechanism = "PLAIN"
+  username = "vibebot"
+  password = "change-me"
+
+# OFTC with SASL EXTERNAL (CERTFP). Pre-register the cert fingerprint on NickServ first.
+# [[networks]]
+# name = "oftc"
+# host = "irc.oftc.net"
+# port = 6697
+# tls = true
+# nick = "vibebot"
+# channels = ["#vibebot"]
+#
+#   [networks.auth]
+#   method = "sasl"
+#   mechanism = "EXTERNAL"
+#   cert_path = "/etc/vibebot/oftc.pem"
+
+# QuakeNet with Q-auth + hidehost (MODE +x).
+# [[networks]]
+# name = "quakenet"
+# host = "irc.quakenet.org"
+# port = 6697
+# tls = true
+# nick = "vibebot"
+# channels = ["#vibebot"]
+#
+#   [networks.auth]
+#   method = "q"
+#   username = "myqaccount"
+#   password = "change-me"
+#   hidehost = true
+#   wait_before_join = true
+
+# IRCnet — no services, pure RFC1459. Some servers choke on CAP.
+# [[networks]]
+# name = "ircnet"
+# host = "open.ircnet.net"
+# port = 6667
+# tls = false
+# protocol = "rfc1459"
+# nick = "vibebot"
+# channels = ["#vibebot"]
+# # no [networks.auth] block → anonymous
 
 # One [[repos]] section per module source repository.
 [[repos]]
