@@ -11,6 +11,7 @@ from typing import Any
 from vibebot.config import Config
 from vibebot.core.acl import AclService
 from vibebot.core.events import EventBus
+from vibebot.core.history import ChannelHistory
 from vibebot.core.network import NetworkConnection
 from vibebot.storage.db import Database
 
@@ -25,6 +26,8 @@ class VibeBot:
         self.bus = EventBus()
         self.db = Database(config.bot.database)
         self.acl = AclService(self.db)
+        self.history = ChannelHistory()
+        self.history.attach(self.bus)
         self.networks: dict[str, NetworkConnection] = {}
 
         # Late imports to keep module import-time graph small.
@@ -72,11 +75,11 @@ class VibeBot:
             port=self.config.api.port,
             log_level=self.config.bot.log_level.lower(),
             lifespan="on",
-            # VibeBot owns signal handling; otherwise uvicorn cancels its own
-            # lifespan task on SIGINT and starlette logs a CancelledError trace.
-            install_signal_handlers=False,
         )
         server = uvicorn.Server(cfg)
+        # VibeBot owns signal handling; otherwise uvicorn cancels its own
+        # lifespan task on SIGINT and starlette logs a CancelledError trace.
+        setattr(server, "install_signal_handlers", lambda: None)
         self._api_server = server
         await server.serve()
 

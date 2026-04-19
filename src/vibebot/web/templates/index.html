@@ -1,38 +1,94 @@
 {% extends "base.html" %}
 {% block content %}
-<section id="networks">
-  <h2>Networks</h2>
-  <div data-api="/api/networks" data-template="network"></div>
+<section class="view view-chat is-active" data-view="chat">
+  <aside class="rail rail-left">
+    <div class="rail-head">
+      <span class="rail-title">networks</span>
+      <button type="button" class="ghost-btn" id="refresh-networks" title="Refresh">↻</button>
+    </div>
+    <div class="rail-scroll" id="network-tree" aria-live="polite">
+      <div class="rail-empty">no networks loaded</div>
+    </div>
+  </aside>
+
+  <section class="buffer">
+    <header class="buffer-head">
+      <div class="buffer-head-top">
+        <div class="buffer-target">
+          <span class="buffer-net" id="active-net">—</span>
+          <span class="buffer-sep">/</span>
+          <span class="buffer-ch" id="active-ch">select a channel</span>
+        </div>
+        <div class="buffer-meta" id="active-meta"></div>
+      </div>
+      <div class="buffer-topic" id="buffer-topic" hidden>
+        <span class="buffer-topic-label">topic</span>
+        <span class="buffer-topic-text" id="buffer-topic-text"></span>
+        <span class="buffer-topic-by" id="buffer-topic-by"></span>
+      </div>
+    </header>
+    <ol class="buffer-log" id="buffer-log" aria-live="polite">
+      <li class="line line-system">
+        <time>--:--</time>
+        <span class="kind">*</span>
+        <span class="body">Pick a network on the left, then a channel. Live events stream in.</span>
+      </li>
+    </ol>
+    <form class="composer" id="send-form" autocomplete="off">
+      <span class="composer-prompt" id="composer-prompt">&gt;</span>
+      <input class="composer-input" id="composer-input" name="message" placeholder="message…" autocomplete="off" disabled>
+      <button class="composer-send" type="submit" disabled>send</button>
+    </form>
+  </section>
+
+  <aside class="rail rail-right">
+    <div class="rail-head">
+      <span class="rail-title">users</span>
+      <span class="rail-count" id="user-count">0</span>
+    </div>
+    <div class="rail-scroll" id="user-list">
+      <div class="rail-empty">—</div>
+    </div>
+  </aside>
 </section>
 
-<section id="send">
-  <h2>Send message</h2>
-  <form id="send-form">
-    <label>Network <input name="network" required></label>
-    <label>Target <input name="target" placeholder="#channel or nick" required></label>
-    <label>Message <input name="message" required></label>
-    <button type="submit">Send</button>
-  </form>
+<section class="view view-modules" data-view="modules">
+  <div class="panel">
+    <h2 class="panel-title">Modules</h2>
+    <div data-api="/api/modules" data-template="module"></div>
+  </div>
 </section>
 
-<section id="modules">
-  <h2>Modules</h2>
-  <div data-api="/api/modules" data-template="module"></div>
+<section class="view view-repos" data-view="repos">
+  <div class="panel">
+    <h2 class="panel-title">Module repositories</h2>
+    <div data-api="/api/repos" data-template="repo"></div>
+    <form id="repo-form" class="stacked-form">
+      <label>Name <input name="name" required></label>
+      <label>URL <input name="url" required></label>
+      <label>Branch <input name="branch" value="main"></label>
+      <button type="submit">Add repo</button>
+    </form>
+  </div>
 </section>
 
-<section id="repos">
-  <h2>Module repositories</h2>
-  <div data-api="/api/repos" data-template="repo"></div>
-  <form id="repo-form">
-    <label>Name <input name="name" required></label>
-    <label>URL <input name="url" required></label>
-    <label>Branch <input name="branch" value="main"></label>
-    <button type="submit">Add</button>
-  </form>
+<section class="view view-acl" data-view="acl">
+  <div class="panel">
+    <h2 class="panel-title">ACL rules</h2>
+    <div data-api="/api/acl" data-template="acl"></div>
+    <form id="acl-form" class="stacked-form">
+      <label>Mask <input name="mask" placeholder="nick!ident@host" required></label>
+      <label>Permission <input name="permission" placeholder="admin" required></label>
+      <label>Note <input name="note"></label>
+      <button type="submit">Add rule</button>
+    </form>
+  </div>
 </section>
 
-<section id="events">
-  <h2>Live events</h2>
-  <pre id="events-log" aria-live="polite"></pre>
+<section class="view view-events" data-view="events">
+  <div class="panel">
+    <h2 class="panel-title">Live event stream</h2>
+    <pre id="events-log" aria-live="polite"></pre>
+  </div>
 </section>
 {% endblock %}

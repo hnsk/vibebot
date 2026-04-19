@@ -20,6 +20,7 @@ async def list_networks(request: Request) -> list[dict]:
             "tls": conn.config.tls,
             "connected": conn.connected,
             "channels": list(conn.config.channels),
+            "nickname": getattr(conn.client, "nickname", None) or conn.config.nick,
         }
         for conn in bot.networks.values()
     ]

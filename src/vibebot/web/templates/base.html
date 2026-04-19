@@ -1,26 +1,86 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}vibebot{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
   <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
+  <script>
+    (function () {
+      var t = localStorage.getItem("vibebot_theme") || "dark";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
 </head>
 <body>
-  <header>
-    <h1><a href="/">vibebot</a></h1>
-    <nav>
-      <a href="#networks">Networks</a>
-      <a href="#modules">Modules</a>
-      <a href="#repos">Repos</a>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="appbar">
+    <div class="brand">
+      <span class="brand-mark">▍</span>
+      <a href="/" class="brand-name">vibe<span>bot</span></a>
+      <span class="brand-tag">// operator console</span>
+    </div>
+    <nav class="tabs" id="view-tabs" role="tablist">
+      <button type="button" class="tab is-active" data-view="chat" role="tab">Chat</button>
+      <button type="button" class="tab" data-view="modules" role="tab">Modules</button>
+      <button type="button" class="tab" data-view="repos" role="tab">Repos</button>
+      <button type="button" class="tab" data-view="acl" role="tab">ACL</button>
+      <button type="button" class="tab" data-view="events" role="tab">Events</button>
     </nav>
+    <div class="appbar-tools">
+      <button type="button" id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <span class="theme-glyph theme-dark">◐</span>
+        <span class="theme-glyph theme-light">◑</span>
+      </button>
+      <div id="auth-status" class="auth-status">
+        <span class="auth-dot" aria-hidden="true"></span>
+        <span id="auth-label">no token</span>
+        <button id="auth-change" type="button" class="ghost-btn">set</button>
+      </div>
+    </div>
   </header>
-  <main>
+  <main class="app">
     {% block content %}{% endblock %}
   </main>
-  <footer>
-    <small>Set an API token in <code>localStorage.vibebot_token</code> to populate panels.</small>
+  <dialog id="token-dialog">
+    <form method="dialog" id="token-form">
+      <h2>API token</h2>
+      <p class="muted">Stored in <code>localStorage.vibebot_token</code>.</p>
+      <label>Token <input name="token" type="password" autocomplete="off" required></label>
+      <menu class="dialog-actions">
+        <button type="button" id="token-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" value="save">Save</button>
+      </menu>
+    </form>
+  </dialog>
+  <dialog id="user-acl-dialog">
+    <form method="dialog" id="user-acl-form">
+      <h2>Add ACL rule</h2>
+      <p class="muted">Grant a permission to <span id="user-acl-nick" class="acl-nick">—</span> on <span id="user-acl-net" class="acl-net">—</span>.</p>
+      <label>Mask
+        <input name="mask" id="user-acl-mask" autocomplete="off" required>
+      </label>
+      <label>Permission
+        <input name="permission" placeholder="admin" autocomplete="off" required>
+      </label>
+      <label>Note <input name="note" autocomplete="off"></label>
+      <p id="user-acl-error" class="dialog-error" hidden></p>
+      <menu class="dialog-actions">
+        <button type="button" id="user-acl-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" value="save">Add rule</button>
+      </menu>
+    </form>
+  </dialog>
+  <footer class="statusbar">
+    <span class="status-cell"><span class="status-key">net</span> <span id="status-net">—</span></span>
+    <span class="status-cell"><span class="status-key">ch</span> <span id="status-ch">—</span></span>
+    <span class="status-cell"><span class="status-key">users</span> <span id="status-users">0</span></span>
+    <span class="status-cell stretch"><span class="status-key">log</span> <span id="footer-status">ready.</span></span>
+    <span class="status-cell"><span class="status-key">ws</span> <span id="status-ws">offline</span></span>
   </footer>
   <script src="{{ url_for('static', path='app.js') }}"></script>
 </body>

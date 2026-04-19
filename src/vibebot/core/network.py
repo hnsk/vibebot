@@ -50,6 +50,29 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     async def _publish(self, kind: str, **payload: Any) -> None:
         await self._bus.publish(Event(kind=kind, network=self._network_name, payload=payload))
 
+    def _user_meta(self, nick: str | None) -> dict[str, str]:
+        """Return {ident, host} for `nick` from pydle's user cache, falling
+        back to '*' when the server has not advertised identity for this nick
+        yet (pydle fills both from `ident@host` on any message/JOIN).
+
+        Note: pydle's `self.users` is a `NormalizingDict` (MutableMapping), NOT
+        a `dict` subclass — so we can't gate the lookup on `isinstance(_, dict)`.
+        """
+        if not nick:
+            return {"ident": "*", "host": "*"}
+        users = getattr(self, "users", None)
+        if users is None:
+            return {"ident": "*", "host": "*"}
+        try:
+            info = users.get(nick)
+        except Exception:
+            info = None
+        if not info:
+            return {"ident": "*", "host": "*"}
+        ident = info.get("username") if hasattr(info, "get") else None
+        host = info.get("hostname") if hasattr(info, "get") else None
+        return {"ident": ident or "*", "host": host or "*"}
+
     # --- registration path ----------------------------------------------
     async def _register(self) -> None:  # type: ignore[override]
         if self._vb_protocol == "rfc1459":
@@ -114,11 +137,38 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     async def on_message(self, target: str, source: str, message: str) -> None:  # type: ignore[override]
         await self._publish("message", target=target, source=source, message=message)
 
+    async def on_ctcp_action(self, by: str, target: str, contents: str) -> None:  # type: ignore[override]
+        # pydle's CTCPSupport intercepts CTCP PRIVMSG before on_message fires.
+        # Re-emit as a wrapped "message" event so the web UI's parseAction path
+        # renders inbound /me just like outbound local echoes.
+        await self._publish(
+            "message",
+            target=target,
+            source=by,
+            message=f"\x01ACTION {contents}\x01",
+        )
+
     async def on_join(self, channel: str, user: str) -> None:  # type: ignore[override]
-        await self._publish("join", channel=channel, user=user)
+        meta = self._user_meta(user)
+        await self._publish("join", channel=channel, user=user, ident=meta["ident"], host=meta["host"])
+        # When we join a channel, servers send NAMES as part of the JOIN response,
+        # but explicitly requesting it guarantees we get a fresh list and lets
+        # the UI refresh once RPL_ENDOFNAMES (366) arrives.
+        if user == self.nickname:
+            try:
+                await self.rawmsg("NAMES", channel)
+            except Exception:
+                log.exception("%s: failed to send NAMES %s", self._network_name, channel)
 
     async def on_part(self, channel: str, user: str, message: str | None = None) -> None:  # type: ignore[override]
-        await self._publish("part", channel=channel, user=user, message=message)
+        meta = self._user_meta(user)
+        await self._publish("part", channel=channel, user=user, ident=meta["ident"], host=meta["host"], message=message)
+
+    async def on_quit(self, user: str, message: str | None = None) -> None:  # type: ignore[override]
+        # pydle sync's user before firing on_quit, so ident/host are still
+        # resolvable here; they disappear once _destroy_user runs afterwards.
+        meta = self._user_meta(user)
+        await self._publish("quit", user=user, ident=meta["ident"], host=meta["host"], message=message)
 
     async def on_kick(
         self,
@@ -127,17 +177,85 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         by: str | None,
         reason: str | None = None,
     ) -> None:  # type: ignore[override]
-        await self._publish("kick", channel=channel, target=target, by=by, reason=reason)
+        tmeta = self._user_meta(target)
+        bmeta = self._user_meta(by)
+        await self._publish(
+            "kick",
+            channel=channel,
+            target=target,
+            target_ident=tmeta["ident"],
+            target_host=tmeta["host"],
+            by=by,
+            by_ident=bmeta["ident"],
+            by_host=bmeta["host"],
+            reason=reason,
+        )
 
     async def on_nick_change(self, old: str, new: str) -> None:  # type: ignore[override]
-        await self._publish("nick", old=old, new=new)
+        # pydle synthesizes a NICK event on registration completion with
+        # old=DEFAULT_NICKNAME ("<unregistered>") to transition from its
+        # placeholder to the real nick. Don't surface that to the UI.
+        if old == "<unregistered>":
+            return
+        meta = self._user_meta(new)
+        await self._publish("nick", old=old, new=new, ident=meta["ident"], host=meta["host"])
 
     async def on_notice(self, target: str, source: str, message: str) -> None:  # type: ignore[override]
         await self._publish("notice", target=target, source=source, message=message)
 
+    async def on_mode_change(self, channel: str, modes: Any, by: str | None) -> None:  # type: ignore[override]
+        bmeta = self._user_meta(by)
+        await self._publish(
+            "mode",
+            channel=channel,
+            modes=list(modes),
+            by=by,
+            by_ident=bmeta["ident"],
+            by_host=bmeta["host"],
+        )
+
+    async def on_topic_change(self, channel: str, message: str, by: str | None) -> None:  # type: ignore[override]
+        await self._publish("topic", channel=channel, topic=message, by=by)
+
+    async def on_raw_332(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_TOPIC on channel join — pydle's default writes channels[chan]["topic"]
+        # but never surfaces an event. Publish one so the UI can show the topic
+        # without a separate fetch.
+        await super().on_raw_332(message)
+        params = list(message.params)
+        if len(params) >= 3:
+            _, channel, topic = params[0], params[1], params[2]
+            await self._publish("topic", channel=channel, topic=topic, by=None, initial=True)
+
     async def on_raw_396(self, message: Any) -> None:  # type: ignore[override]
         self._vb_host_hidden.set()
         await self._publish("host_hidden", params=list(message.params))
+
+    async def on_raw_366(self, message: Any) -> None:  # type: ignore[override]
+        # End of /NAMES. pydle's on_raw_353 has already populated the channel's
+        # users + modes dict; emit an event so the UI refreshes its user list
+        # now that initial @/+ status is known.
+        await super().on_raw_366(message)
+        params = list(message.params)
+        channel = params[1] if len(params) >= 2 else None
+        if channel:
+            await self._publish("names", channel=channel)
+
+    async def on_unknown(self, message: Any) -> None:  # type: ignore[override]
+        # pydle logs unhandled server replies (numerics like 461/421/401, plus
+        # non-numeric server commands) and drops them. Bridge them onto the bus
+        # so /raw output and server error replies surface in the UI.
+        await super().on_unknown(message)
+        try:
+            params = [p for p in (message.params or ()) if p is not None]
+        except Exception:
+            params = []
+        await self._publish(
+            "server_reply",
+            source=getattr(message, "source", None),
+            command=str(getattr(message, "command", "") or ""),
+            params=params,
+        )
 
     async def on_isupport_modes(self, value: Any) -> None:  # type: ignore[override]
         # Ergo (and some other servers) advertise MODES with no value,
@@ -235,6 +353,10 @@ class NetworkConnection:
             self._task = None
 
     async def send_message(self, target: str, message: str) -> None:
+        if message.startswith("\x01ACTION ") and message.endswith("\x01"):
+            body = message[len("\x01ACTION "):-1]
+            await self._client.ctcp(target, "ACTION", body)
+            return
         await self._client.message(target, message)
 
     async def send_raw(self, command: str, *params: str) -> None:
