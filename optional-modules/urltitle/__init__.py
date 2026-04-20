@@ -68,8 +68,17 @@ class UrlTitleSettings(BaseModel):
         description="User-Agent header used for outbound fetches.",
     )
     ignore_hosts: list[str] = Field(
-        default_factory=list,
-        description="Hostnames (exact match, lowercase) to skip.",
+        default_factory=lambda: [
+            "youtube.com",
+            "youtu.be",
+            "twitter.com",
+            "x.com",
+        ],
+        description=(
+            "Domain suffixes (lowercase) to skip. Matches the exact host and "
+            "any subdomain, e.g. 'youtube.com' also skips 'm.youtube.com' and "
+            "'music.youtube.com'."
+        ),
     )
 
 
@@ -123,7 +132,7 @@ class UrlTitleModule(Module):
         reply_to = target if target.startswith("#") else source
 
         host = _hostname(url)
-        if host and host in {h.lower() for h in self.settings.ignore_hosts}:
+        if host and _host_matches(host, self.settings.ignore_hosts):
             return
 
         ttl = max(0, self.settings.cache_refresh_minutes) * 60
@@ -231,6 +240,17 @@ def _hostname(url: str) -> str | None:
     if not m:
         return None
     return m.group(1).lower()
+
+
+def _host_matches(host: str, patterns: list[str]) -> bool:
+    host = host.lower()
+    for raw in patterns:
+        pat = raw.strip().lower().lstrip(".")
+        if not pat:
+            continue
+        if host == pat or host.endswith("." + pat):
+            return True
+    return False
 
 
 def _detect_charset(content_type: str, body: bytes) -> str:
