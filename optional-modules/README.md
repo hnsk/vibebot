@@ -23,3 +23,4 @@ After the next start the bot clones the repo; enable a module via the web UI
 | Name       | Description                                          |
 |------------|------------------------------------------------------|
 | `remindme` | Let users schedule personal reminders via chat. Syntax: `!remindme <when> <message>` (e.g. `5m`, `1h30m`, `1 day`). |
+| `urltitle` | Auto-post page titles for URLs seen in chat. Skips images/video/binaries, prefers `og:title`, caches fetched titles in SQLite (refetched after 10 min). |
