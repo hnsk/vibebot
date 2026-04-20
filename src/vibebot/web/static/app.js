@@ -855,6 +855,51 @@
     return `${type}${bits.length ? " " + bits.join(",") : ""}`;
   }
 
+  const UPCOMING_SCHEDULE_STATUSES = new Set(["scheduled", "paused"]);
+  const PAST_SCHEDULE_LIMIT = 5;
+
+  function renderUserScheduleRow(s) {
+    const label = s.title || (s.id ? s.id.slice(0, 8) : "(unnamed)");
+    const status = s.status || "scheduled";
+    const actions = [];
+    if (status === "scheduled") {
+      actions.push(`<button data-action="schedule-pause" data-id="${escapeAttr(s.id)}">Pause</button>`);
+    } else if (status === "paused") {
+      actions.push(`<button data-action="schedule-resume" data-id="${escapeAttr(s.id)}">Resume</button>`);
+    }
+    if (status === "scheduled" || status === "paused") {
+      actions.push(`<button data-action="schedule-run-now" data-id="${escapeAttr(s.id)}">Run now</button>`);
+      actions.push(`<button data-action="schedule-cancel" data-id="${escapeAttr(s.id)}">Cancel</button>`);
+    }
+    const timeIso = UPCOMING_SCHEDULE_STATUSES.has(status)
+      ? (s.next_run_at || "")
+      : (s.last_run_at || s.updated_at || "");
+    return `
+      <li class="schedule-row">
+        <span class="schedule-name" title="${escapeAttr(s.id)}">${escapeHtml(label)}</span>
+        <span class="status-pill is-${escapeAttr(status)}">${escapeHtml(status)}</span>
+        <span class="schedule-trigger">${escapeHtml(triggerSummary(s.trigger))}</span>
+        <span class="schedule-next" title="${escapeAttr(timeIso)}">${escapeHtml(relTime(timeIso))}</span>
+        <span class="schedule-actions">${actions.join("")}</span>
+      </li>`;
+  }
+
+  function partitionSchedules(schedules) {
+    const upcoming = [];
+    const past = [];
+    for (const s of schedules) {
+      const status = s.status || "scheduled";
+      if (UPCOMING_SCHEDULE_STATUSES.has(status)) upcoming.push(s);
+      else past.push(s);
+    }
+    past.sort((a, b) => {
+      const at = new Date(a.last_run_at || a.updated_at || 0).getTime();
+      const bt = new Date(b.last_run_at || b.updated_at || 0).getTime();
+      return bt - at;
+    });
+    return { upcoming, past };
+  }
+
   function renderModuleScheduleBody(bodyEl, data) {
     const tasks = Array.isArray(data.module_tasks) ? data.module_tasks : [];
     const schedules = Array.isArray(data.user_schedules) ? data.user_schedules : [];
@@ -864,28 +909,13 @@
         <span class="schedule-trigger" title="${escapeAttr(t.job_id)}">${escapeHtml(t.trigger || "")}</span>
         <span class="schedule-next" title="${escapeAttr(t.next_run_at || "")}">${t.paused ? "paused" : escapeHtml(relTime(t.next_run_at))}</span>
       </li>`).join("");
-    const schedRows = schedules.map((s) => {
-      const label = s.title || (s.id ? s.id.slice(0, 8) : "(unnamed)");
-      const status = s.status || "scheduled";
-      const actions = [];
-      if (status === "scheduled") {
-        actions.push(`<button data-action="schedule-pause" data-id="${escapeAttr(s.id)}">Pause</button>`);
-      } else if (status === "paused") {
-        actions.push(`<button data-action="schedule-resume" data-id="${escapeAttr(s.id)}">Resume</button>`);
-      }
-      if (status === "scheduled" || status === "paused") {
-        actions.push(`<button data-action="schedule-run-now" data-id="${escapeAttr(s.id)}">Run now</button>`);
-        actions.push(`<button data-action="schedule-cancel" data-id="${escapeAttr(s.id)}">Cancel</button>`);
-      }
-      return `
-      <li class="schedule-row">
-        <span class="schedule-name" title="${escapeAttr(s.id)}">${escapeHtml(label)}</span>
-        <span class="status-pill is-${escapeAttr(status)}">${escapeHtml(status)}</span>
-        <span class="schedule-trigger">${escapeHtml(triggerSummary(s.trigger))}</span>
-        <span class="schedule-next" title="${escapeAttr(s.next_run_at || "")}">${escapeHtml(relTime(s.next_run_at))}</span>
-        <span class="schedule-actions">${actions.join("")}</span>
-      </li>`;
-    }).join("");
+    const { upcoming, past } = partitionSchedules(schedules);
+    const shownPast = past.slice(0, PAST_SCHEDULE_LIMIT);
+    const upcomingRows = upcoming.map(renderUserScheduleRow).join("");
+    const pastRows = shownPast.map(renderUserScheduleRow).join("");
+    const pastHeading = past.length > shownPast.length
+      ? `Past user schedules (${shownPast.length} of ${past.length})`
+      : `Past user schedules (${past.length})`;
     bodyEl.innerHTML = `
       <div class="module-schedules-group">
         <div class="module-schedules-heading">Periodic tasks (${tasks.length})</div>
@@ -895,9 +925,15 @@
           : `<div class="rail-empty">none</div>`}
       </div>
       <div class="module-schedules-group">
-        <div class="module-schedules-heading">Upcoming user schedules (${schedules.length})</div>
-        ${schedules.length
-          ? `<ul class="module-schedules-list">${schedRows}</ul>`
+        <div class="module-schedules-heading">Upcoming user schedules (${upcoming.length})</div>
+        ${upcoming.length
+          ? `<ul class="module-schedules-list">${upcomingRows}</ul>`
+          : `<div class="rail-empty">none</div>`}
+      </div>
+      <div class="module-schedules-group">
+        <div class="module-schedules-heading">${pastHeading}</div>
+        ${shownPast.length
+          ? `<ul class="module-schedules-list">${pastRows}</ul>`
           : `<div class="rail-empty">none</div>`}
       </div>`;
   }

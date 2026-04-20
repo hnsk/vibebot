@@ -107,12 +107,26 @@ class ScheduleDTO:
             "status": self.status,
             "title": self.title,
             "misfire_grace_seconds": self.misfire_grace_seconds,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
-            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "created_at": _iso_utc(self.created_at),
+            "updated_at": _iso_utc(self.updated_at),
+            "next_run_at": _iso_utc(self.next_run_at),
+            "last_run_at": _iso_utc(self.last_run_at),
             "last_error": self.last_error,
         }
+
+
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a datetime as a UTC-anchored ISO string.
+
+    SQLite strips timezone info on round-trip, so naive datetimes coming out of
+    the DB are assumed to be UTC (we only ever write UTC). Output includes an
+    explicit offset so JS `new Date(...)` treats it correctly in any locale.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.isoformat()
 
 
 def _json_loads(raw: str | None) -> dict[str, Any]:
