@@ -13,6 +13,7 @@ from vibebot.core.acl import AclService
 from vibebot.core.events import EventBus
 from vibebot.core.history import ChannelHistory
 from vibebot.core.network import NetworkConnection
+from vibebot.core.roster import ChannelRoster
 from vibebot.storage.db import Database
 
 log = logging.getLogger(__name__)
@@ -26,9 +27,10 @@ class VibeBot:
         self.bus = EventBus()
         self.db = Database(config.bot.database)
         self.acl = AclService(self.db)
-        self.history = ChannelHistory()
-        self.history.attach(self.bus)
         self.networks: dict[str, NetworkConnection] = {}
+        self.roster = ChannelRoster()
+        self.history = ChannelHistory(own_nick_of=self._own_nick_of)
+        self.history.attach(self.bus)
 
         # Late imports to keep module import-time graph small.
         from vibebot.modules.loader import ModuleManager
@@ -57,9 +59,15 @@ class VibeBot:
         finally:
             await self._shutdown()
 
+    def _own_nick_of(self, network: str) -> str | None:
+        conn = self.networks.get(network)
+        if conn is None:
+            return None
+        return getattr(conn.client, "nickname", None)
+
     async def _start_networks(self) -> None:
         for net_cfg in self.config.networks:
-            conn = NetworkConnection(net_cfg, self.bus)
+            conn = NetworkConnection(net_cfg, self.bus, roster=self.roster)
             self.networks[net_cfg.name] = conn
             await conn.start()
 

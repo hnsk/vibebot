@@ -21,7 +21,13 @@
     hydrated: new Set(),     // bufKeys whose history has been fetched
     pendingWhois: new Map(), // `${net}\u0001${nickLower}` → placeholder line id
     topics: {},              // {bufKey: {topic, by, set_at}}
+    pendingEchoes: new Map(),// bufKey → [{kind, body, expires}] — FIFO of our own sends
+                             // awaiting the pydle-synthesized `on_message` echo so
+                             // we can dedup it against the optimistic local render.
+                             // Any own-nick message NOT in the queue originated
+                             // from a bot module and must be displayed.
   };
+  const ECHO_TTL_MS = 10000;
 
   /* ---------------- persistence ---------------- */
   try {
@@ -285,6 +291,30 @@
     }
   }
 
+  function recordPendingEcho(net, target, kind, body) {
+    const key = bufKey(net, target);
+    let q = state.pendingEchoes.get(key);
+    if (!q) { q = []; state.pendingEchoes.set(key, q); }
+    q.push({ kind, body, expires: Date.now() + ECHO_TTL_MS });
+  }
+  // Match a pydle-synthesized echo against the oldest recorded send for this
+  // buffer. Expired entries are dropped first. Returns true iff the head
+  // matched — meaning the UI already rendered this message optimistically and
+  // the echo should be suppressed.
+  function consumePendingEcho(net, target, kind, body) {
+    const key = bufKey(net, target);
+    const q = state.pendingEchoes.get(key);
+    if (!q || q.length === 0) return false;
+    const now = Date.now();
+    while (q.length && q[0].expires < now) q.shift();
+    if (q.length === 0) return false;
+    if (q[0].kind === kind && q[0].body === body) {
+      q.shift();
+      return true;
+    }
+    return false;
+  }
+
   function pushLine(net, target, line) {
     const buf = getBuffer(net, target);
     line.ts = line.ts || new Date();
@@ -300,6 +330,30 @@
     }
   }
 
+  async function closeQuery(net, target) {
+    if (!net || !target || isChannel(target) || target === "*") return;
+    try {
+      await api(`/api/networks/${encodeURIComponent(net)}/queries/${encodeURIComponent(target)}`,
+                { method: "DELETE" });
+    } catch (err) {
+      setStatus(`close ${target}: ${err.message}`, "err");
+      return;
+    }
+    const key = bufKey(net, target);
+    state.buffers.delete(key);
+    state.hydrated.delete(key);
+    state.pendingEchoes.delete(key);
+    delete state.unread[key];
+    delete state.topics[key];
+    if (state.activeNet === net && state.activeTarget === target) {
+      state.activeTarget = "*";
+    }
+    renderTree();
+    renderActiveBuffer();
+    persistState();
+    setStatus(`closed query ${target}`, "ok");
+  }
+
   /* ---------------- network tree render ---------------- */
   function renderTree() {
     const root = $("network-tree");
@@ -313,36 +367,62 @@
       const declared = new Set(n.channels || []);
       const joined = state.joined[n.name] ? Object.keys(state.joined[n.name]) : [];
       joined.forEach((c) => declared.add(c));
-      // Also surface query buffers (non-channel targets we have buffers for)
+      // Also surface query buffers (non-channel targets we have buffers for).
+      // The "*" target is the network status bucket — it goes in its own group.
       for (const key of state.buffers.keys()) {
         const [bn, bt] = key.split("\u0001");
-        if (bn === n.name) declared.add(bt);
+        if (bn === n.name && bt !== "*") declared.add(bt);
       }
-      const chans = Array.from(declared).sort((a, b) => {
-        const ac = isChannel(a), bc = isChannel(b);
-        if (ac !== bc) return ac ? -1 : 1;
-        return a.localeCompare(b);
-      });
-      const statusCls = n.connected ? "connected" : "failed";
-      const channelHtml = chans.map((c) => {
-        const k = bufKey(n.name, c);
+      const all = Array.from(declared);
+      const chans = all.filter(isChannel).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }));
+      const queries = all.filter((t) => !isChannel(t)).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+      const renderRow = (target, prefixGlyph, displayName, closable) => {
+        const k = bufKey(n.name, target);
         const unread = state.unread[k] || 0;
-        const active = (state.activeNet === n.name && state.activeTarget === c) ? "is-active" : "";
-        const prefix = isChannel(c) ? c[0] : "@";
-        const name = isChannel(c) ? c.slice(1) : c;
-        return `<div class="ch-row ${active}" data-net="${escapeAttr(n.name)}" data-target="${escapeAttr(c)}">
+        const active = (state.activeNet === n.name && state.activeTarget === target) ? "is-active" : "";
+        const prefix = prefixGlyph != null
+          ? prefixGlyph
+          : (isChannel(target) ? target[0] : "@");
+        const name = displayName != null
+          ? displayName
+          : (isChannel(target) ? target.slice(1) : target);
+        const cls = "ch-row " + active + (closable ? " is-closable" : "");
+        const closeBtn = closable
+          ? `<button type="button" class="ch-close" data-action="close-query" title="Close query (clears history)" aria-label="Close query">×</button>`
+          : "";
+        return `<div class="${cls}" data-net="${escapeAttr(n.name)}" data-target="${escapeAttr(target)}">
           <span class="ch-prefix">${escapeHtml(prefix)}</span>
           <span class="ch-name">${escapeHtml(name)}</span>
           <span class="ch-badge" ${unread ? "" : "hidden"}>${unread}</span>
+          ${closeBtn}
         </div>`;
-      }).join("") || `<div class="rail-empty">no channels</div>`;
+      };
+
+      const section = (label, rowsHtml) =>
+        rowsHtml ? `<div class="ch-section-head">${escapeHtml(label)}</div>${rowsHtml}` : "";
+
+      // Status bucket is always available per network — server replies, connect
+      // notices, and other non-targeted messages land on the "*" target.
+      const statusHtml = section("status",
+        renderRow("*", "§", "status"));
+      const chansHtml = section("channels",
+        chans.map((c) => renderRow(c)).join(""));
+      const queriesHtml = section("queries",
+        queries.map((c) => renderRow(c, null, null, true)).join(""));
+
+      const body = (statusHtml + chansHtml + queriesHtml)
+        || `<div class="rail-empty">no channels</div>`;
+      const statusCls = n.connected ? "connected" : "failed";
       return `<div class="net-group ${open ? "is-open" : ""}" data-net="${escapeAttr(n.name)}">
         <div class="net-row" data-action="toggle-net">
           <span class="net-caret">▶</span>
           <span class="net-name">${escapeHtml(n.name)}</span>
           <span class="net-status ${statusCls}" title="${n.connected ? "connected" : "offline"}"></span>
         </div>
-        <div class="net-channels">${channelHtml}</div>
+        <div class="net-channels">${body}</div>
       </div>`;
     });
     root.innerHTML = parts.join("");
@@ -373,13 +453,17 @@
       return;
     }
 
+    const isStatus = state.activeTarget === "*";
+    const displayTarget = isStatus ? "status" : state.activeTarget;
     netLabel.textContent = state.activeNet;
-    chLabel.textContent = state.activeTarget;
+    chLabel.textContent = displayTarget;
     composer.disabled = false; sendBtn.disabled = false;
-    composer.placeholder = `message ${state.activeTarget}`;
-    prompt.textContent = isChannel(state.activeTarget) ? "›" : "@";
+    composer.placeholder = isStatus
+      ? "status — slash commands only (try /help)"
+      : `message ${state.activeTarget}`;
+    prompt.textContent = isStatus ? "§" : (isChannel(state.activeTarget) ? "›" : "@");
     $("status-net").textContent = state.activeNet;
-    $("status-ch").textContent = state.activeTarget;
+    $("status-ch").textContent = displayTarget;
     renderTopic();
 
     const buf = getBuffer(state.activeNet, state.activeTarget);
@@ -592,15 +676,31 @@
     renderActiveBuffer();
     hydrateHistory(net, target);
     if (isChannel(target)) fetchTopic(net, target);
+    focusComposer();
+  }
+
+  function focusComposer() {
+    const composer = $("composer-input");
+    if (!composer || composer.disabled) return;
+    // Defer so render passes and any pending layout settle first.
+    setTimeout(() => {
+      composer.focus({ preventScroll: true });
+      const len = composer.value.length;
+      composer.setSelectionRange(len, len);
+    }, 0);
   }
 
   async function hydrateHistory(net, target) {
-    if (!net || !target || !isChannel(target)) return;
+    // Status bucket ("*") has no server-side history — live events only.
+    if (!net || !target || target === "*") return;
     const key = bufKey(net, target);
     if (state.hydrated.has(key)) return;
     state.hydrated.add(key);
+    const url = isChannel(target)
+      ? `/api/networks/${encodeURIComponent(net)}/channels/${encodeURIComponent(target)}/history`
+      : `/api/networks/${encodeURIComponent(net)}/queries/${encodeURIComponent(target)}/history`;
     try {
-      const lines = await api(`/api/networks/${encodeURIComponent(net)}/channels/${encodeURIComponent(target)}/history`);
+      const lines = await api(url);
       if (!Array.isArray(lines) || lines.length === 0) return;
       const buf = getBuffer(net, target);
       // Merge history at the front while avoiding duplicates of any live lines
@@ -613,6 +713,7 @@
       buf.splice(0, 0, ...historical);
       if (buf.length > state.bufferLimit) buf.splice(0, buf.length - state.bufferLimit);
       if (state.activeNet === net && state.activeTarget === target) renderActiveBuffer();
+      else renderTree();
     } catch {
       state.hydrated.delete(key);
     }
@@ -639,6 +740,16 @@
           });
         } catch {}
       }));
+      // Discover query (PM) buffers the server knows about, so they re-appear
+      // in the sidebar after a page refresh. Hydrating populates the local
+      // buffer with stored lines and makes renderTree pick up the row.
+      await Promise.all(nets.map(async (n) => {
+        try {
+          const queries = await api(`/api/networks/${encodeURIComponent(n.name)}/queries`);
+          if (!Array.isArray(queries)) return;
+          await Promise.all(queries.map((q) => hydrateHistory(n.name, q.peer)));
+        } catch {}
+      }));
       // pick a sensible default selection if none
       if (!state.activeNet && nets.length > 0) {
         const n0 = nets[0];
@@ -650,7 +761,10 @@
       renderActiveBuffer();
       // Hydrate history for the restored/initial channel (selectChannel only
       // fires on user action, not on load-time restoration).
-      if (state.activeNet && state.activeTarget) hydrateHistory(state.activeNet, state.activeTarget);
+      if (state.activeNet && state.activeTarget) {
+        hydrateHistory(state.activeNet, state.activeTarget);
+        focusComposer();
+      }
     } catch (err) {
       setStatus(err.message, "err");
     }
@@ -994,17 +1108,29 @@
       case "message": {
         const target = p.target;
         const isPM = !isChannel(target);
-        const buffer = isPM ? p.source : target;
-        // Drop server echoes of our own outbound. We render outgoing messages
-        // optimistically in sendActiveMessage(); the IRC server (or a module
-        // rebroadcast) will then echo the same line back under our nick when
-        // IRCv3 echo-message is active. With one connection per network, any
-        // message bearing our nick IS us — no body or time match needed.
+        // pydle's IRCv3.2 `message()` synthesizes `on_message(own_nick, …)`
+        // locally for every outbound send (no echo-message cap needed). The
+        // web UI also renders its own sends optimistically, so echoes that
+        // match a queued send are suppressed. Unmatched own-nick messages
+        // originate from bot modules (e.g. !help handler) and MUST render.
         const ownNick = state.nicks[net];
-        if (ownNick && p.source === ownNick) break;
-        const body = parseAction(p.message);
-        if (body !== null) {
-          pushLine(net, buffer, { kind: "action", nick: p.source, body });
+        // PM buffer is keyed by the peer nick: on inbound source is peer, on
+        // outbound (own-nick echo) target is peer. Routing by source alone
+        // opens a phantom query with the bot itself and splits a conversation
+        // across two buffers.
+        const buffer = isPM ? (ownNick && p.source === ownNick ? target : p.source) : target;
+        const actionBody = parseAction(p.message);
+        const echoKind = actionBody !== null ? "action" : "msg";
+        const echoBody = actionBody !== null ? actionBody : p.message;
+        if (ownNick && p.source === ownNick) {
+          if (consumePendingEcho(net, buffer, echoKind, echoBody)) break;
+          pushLine(net, buffer, actionBody !== null
+            ? { kind: "action", self: true, nick: p.source, body: actionBody }
+            : { kind: "msg",    self: true, nick: p.source, body: p.message });
+          break;
+        }
+        if (actionBody !== null) {
+          pushLine(net, buffer, { kind: "action", nick: p.source, body: actionBody });
         } else {
           pushLine(net, buffer, { kind: "msg", nick: p.source, body: p.message });
         }
@@ -1013,7 +1139,8 @@
       case "notice": {
         const target = p.target;
         const isPM = !isChannel(target);
-        const buffer = isPM ? p.source : target;
+        const ownNick = state.nicks[net];
+        const buffer = isPM ? (ownNick && p.source === ownNick ? target : p.source) : target;
         pushLine(net, buffer, { kind: "notice", nick: p.source, body: p.message });
         break;
       }
@@ -1059,7 +1186,15 @@
         });
         if (state.activeNet === net && state.activeTarget === p.channel) loadActiveUsers();
         break;
-      case "nick":
+      case "nick": {
+        // Keep own-nick tracking in sync — the server just accepted our rename.
+        if (state.nicks[net] === p.old) state.nicks[net] = p.new;
+        // Update the per-network joined cache so the sidebar count stays right.
+        const joined = state.joined[net] || {};
+        for (const ch of Object.keys(joined)) {
+          const idx = joined[ch].indexOf(p.old);
+          if (idx !== -1) joined[ch][idx] = p.new;
+        }
         // broadcast to every buffer of this network the user is in (cheap: log to active)
         for (const key of state.buffers.keys()) {
           const [bn] = key.split("\u0001");
@@ -1068,7 +1203,13 @@
             old: p.old, new: p.new, ident: p.ident, host: p.host,
           });
         }
+        // Refresh the active user list so rename reflects immediately in the
+        // roster panel (server-side ChannelRoster already applied the rename).
+        if (state.activeNet === net && isChannel(state.activeTarget)) {
+          loadActiveUsers();
+        }
         break;
+      }
       case "connect":
         pushLine(net, "*", { kind: "system", body: `connected to ${net}` });
         loadNetworks();
@@ -1085,6 +1226,11 @@
         break;
       }
       case "names":
+        if (state.activeNet === net && state.activeTarget === p.channel) loadActiveUsers();
+        break;
+      case "roster":
+        // Server emits "roster" after /WHO completes on join so the UI can
+        // refresh once the authoritative masks + modes are known.
         if (state.activeNet === net && state.activeTarget === p.channel) loadActiveUsers();
         break;
       case "topic":
@@ -1178,17 +1324,23 @@
   async function sendActiveMessage(text) {
     if (!state.activeNet || !state.activeTarget) return;
     const net = state.activeNet, target = state.activeTarget;
+    const isStatus = target === "*";
+    if (text.startsWith("/") && !text.startsWith("//")) {
+      return runSlashCommand(net, target, text.slice(1));
+    }
+    if (isStatus) {
+      errorLine("status buffer accepts slash commands only (try /help)");
+      return;
+    }
     if (text.startsWith("//")) {
       // escape: send literal slash message
       return sendPlain(net, target, text.slice(1));
-    }
-    if (text.startsWith("/")) {
-      return runSlashCommand(net, target, text.slice(1));
     }
     return sendPlain(net, target, text);
   }
 
   async function sendPlain(net, target, text) {
+    recordPendingEcho(net, target, "msg", text);
     try {
       await api(`/api/networks/${encodeURIComponent(net)}/send`, {
         method: "POST",
@@ -1203,6 +1355,7 @@
   }
 
   async function sendAction(net, target, body) {
+    recordPendingEcho(net, target, "action", body);
     try {
       await api(`/api/networks/${encodeURIComponent(net)}/send`, {
         method: "POST",
@@ -1318,6 +1471,7 @@
           const t = argv[0];
           const body = rest.slice(t.length).trim();
           need(body.length > 0, "/msg requires text");
+          recordPendingEcho(net, t, "msg", body);
           await api(`/api/networks/${encodeURIComponent(net)}/send`, {
             method: "POST",
             body: { target: t, message: body },
@@ -1440,6 +1594,13 @@
 
     // network tree
     $("network-tree").addEventListener("click", (ev) => {
+      const closeBtn = ev.target.closest(".ch-close");
+      if (closeBtn) {
+        ev.stopPropagation();
+        const row = closeBtn.closest(".ch-row");
+        if (row) closeQuery(row.dataset.net, row.dataset.target);
+        return;
+      }
       const ch = ev.target.closest(".ch-row");
       if (ch) { selectChannel(ch.dataset.net, ch.dataset.target); return; }
       const row = ev.target.closest("[data-action=toggle-net]");

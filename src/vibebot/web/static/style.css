@@ -391,6 +391,22 @@ body {
 }
 .net-group.is-open .net-channels { display: block; }
 
+.ch-section-head {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0.4rem 0.75rem 0.15rem 1.6rem;
+  user-select: none;
+}
+.ch-section-head:not(:first-child) {
+  margin-top: 0.15rem;
+  border-top: 1px dashed var(--line-soft);
+}
+
 .ch-row {
   display: grid;
   grid-template-columns: 1.25rem 1fr auto;
@@ -430,6 +446,31 @@ body {
   font-weight: 700;
 }
 .ch-badge[hidden] { display: none; }
+
+.ch-row.is-closable {
+  grid-template-columns: 1.25rem 1fr auto auto;
+}
+.ch-close {
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity var(--tx), color var(--tx), background var(--tx);
+}
+.ch-row:hover .ch-close,
+.ch-row.is-active .ch-close { opacity: 1; }
+.ch-close:hover {
+  color: var(--err);
+  background: var(--panel);
+}
 
 /* User list */
 .user-row {

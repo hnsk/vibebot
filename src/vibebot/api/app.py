@@ -30,6 +30,7 @@ def build_app(bot: VibeBot) -> FastAPI:
 
     app.include_router(networks.router)
     app.include_router(channels.router)
+    app.include_router(channels.queries_router)
     app.include_router(send.router)
     app.include_router(modules.router)
     app.include_router(repos.router)

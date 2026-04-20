@@ -20,6 +20,7 @@ from vibebot.config import (
     SaslAuthConfig,
 )
 from vibebot.core.events import Event, EventBus
+from vibebot.core.roster import ChannelRoster
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         autojoin: list[str],
         protocol: str,
         auth: Any,
+        roster: ChannelRoster | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -43,6 +45,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         self._autojoin = autojoin
         self._vb_protocol = protocol
         self._vb_auth = auth
+        self._vb_roster = roster
         self._vb_sasl_failed = False
         self._vb_host_hidden = asyncio.Event()
         self._vb_disconnected = asyncio.Event()
@@ -111,6 +114,8 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
                 await self.disconnect(expected=True)
                 return
 
+        if self._vb_roster is not None and self.nickname:
+            self._vb_roster.set_own_nick(self._network_name, self.nickname)
         for channel in self._autojoin:
             await self.join(channel)
         await self._publish("connect")
@@ -150,25 +155,46 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
 
     async def on_join(self, channel: str, user: str) -> None:  # type: ignore[override]
         meta = self._user_meta(user)
+        if self._vb_roster is not None:
+            if user == self.nickname:
+                # Our own join → reset the channel and seed fresh state via /WHO.
+                self._vb_roster.reset_channel(self._network_name, channel)
+            else:
+                self._vb_roster.upsert_user(
+                    self._network_name, channel, user,
+                    ident=meta["ident"], host=meta["host"],
+                )
         await self._publish("join", channel=channel, user=user, ident=meta["ident"], host=meta["host"])
-        # When we join a channel, servers send NAMES as part of the JOIN response,
-        # but explicitly requesting it guarantees we get a fresh list and lets
-        # the UI refresh once RPL_ENDOFNAMES (366) arrives.
+        # /WHO is our canonical source for channel membership + masks + user
+        # modes. Runs once on bot join, per-channel; subsequent activity updates
+        # the roster via JOIN/PART/QUIT/KICK/NICK/MODE events.
         if user == self.nickname:
             try:
-                await self.rawmsg("NAMES", channel)
+                await self.rawmsg("WHO", channel)
             except Exception:
-                log.exception("%s: failed to send NAMES %s", self._network_name, channel)
+                log.exception("%s: failed to send WHO %s", self._network_name, channel)
 
     async def on_part(self, channel: str, user: str, message: str | None = None) -> None:  # type: ignore[override]
         meta = self._user_meta(user)
+        if self._vb_roster is not None:
+            if user == self.nickname:
+                self._vb_roster.drop_channel(self._network_name, channel)
+            else:
+                self._vb_roster.remove_user(self._network_name, channel, user)
         await self._publish("part", channel=channel, user=user, ident=meta["ident"], host=meta["host"], message=message)
 
     async def on_quit(self, user: str, message: str | None = None) -> None:  # type: ignore[override]
         # pydle sync's user before firing on_quit, so ident/host are still
         # resolvable here; they disappear once _destroy_user runs afterwards.
         meta = self._user_meta(user)
-        await self._publish("quit", user=user, ident=meta["ident"], host=meta["host"], message=message)
+        channels: list[str] = []
+        if self._vb_roster is not None:
+            channels = self._vb_roster.remove_user_all(self._network_name, user)
+        await self._publish(
+            "quit",
+            user=user, ident=meta["ident"], host=meta["host"],
+            message=message, channels=channels,
+        )
 
     async def on_kick(
         self,
@@ -179,6 +205,11 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     ) -> None:  # type: ignore[override]
         tmeta = self._user_meta(target)
         bmeta = self._user_meta(by)
+        if self._vb_roster is not None:
+            if target == self.nickname:
+                self._vb_roster.drop_channel(self._network_name, channel)
+            else:
+                self._vb_roster.remove_user(self._network_name, channel, target)
         await self._publish(
             "kick",
             channel=channel,
@@ -198,13 +229,25 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         if old == "<unregistered>":
             return
         meta = self._user_meta(new)
-        await self._publish("nick", old=old, new=new, ident=meta["ident"], host=meta["host"])
+        channels: list[str] = []
+        if self._vb_roster is not None:
+            channels = self._vb_roster.rename_user(self._network_name, old, new)
+        await self._publish(
+            "nick",
+            old=old, new=new, ident=meta["ident"], host=meta["host"],
+            channels=channels,
+        )
 
     async def on_notice(self, target: str, source: str, message: str) -> None:  # type: ignore[override]
         await self._publish("notice", target=target, source=source, message=message)
 
     async def on_mode_change(self, channel: str, modes: Any, by: str | None) -> None:  # type: ignore[override]
         bmeta = self._user_meta(by)
+        # pydle has already applied the mode change to its channel state by the
+        # time this fires. Mirror privilege-mode letters onto the roster so it
+        # stays in sync without re-parsing raw MODE args here.
+        if self._vb_roster is not None:
+            self._vb_roster.sync_modes_from_client(self._network_name, channel, self)
         await self._publish(
             "mode",
             channel=channel,
@@ -241,6 +284,42 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         if channel:
             await self._publish("names", channel=channel)
 
+    async def on_raw_352(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_WHOREPLY: <client> <channel> <ident> <host> <server> <nick> <flags> :<hopcount> <realname>
+        # Canonical source for nick!ident@host on channel join — populates the roster.
+        params = list(message.params)
+        if len(params) < 8:
+            return
+        channel, ident, host = params[1], params[2], params[3]
+        nick, flags, trailing = params[5], params[6] or "", params[7] or ""
+        rest = trailing.split(" ", 1)
+        realname = rest[1] if len(rest) > 1 else ""
+        prefix_map = {sym: letter for sym, letter in (getattr(self, "_nickname_prefixes", {}) or {}).items()}
+        modes: set[str] = set()
+        for ch in flags:
+            letter = prefix_map.get(ch)
+            if letter:
+                modes.add(letter)
+        if self._vb_roster is not None:
+            self._vb_roster.upsert_user(
+                self._network_name, channel, nick,
+                ident=ident, host=host, realname=realname, modes=modes,
+            )
+        await self._publish(
+            "who_reply",
+            channel=channel, nick=nick, ident=ident, host=host,
+            realname=realname, modes=sorted(modes),
+        )
+
+    async def on_raw_315(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_ENDOFWHO: <client> <mask> :End of WHO list
+        await super().on_raw_315(message)
+        params = list(message.params)
+        mask = params[1] if len(params) >= 2 else None
+        await self._publish("who_end", mask=mask)
+        if mask:
+            await self._publish("roster", channel=mask, reason="who")
+
     async def on_unknown(self, message: Any) -> None:  # type: ignore[override]
         # pydle logs unhandled server replies (numerics like 461/421/401, plus
         # non-numeric server commands) and drops them. Bridge them onto the bus
@@ -276,9 +355,16 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
 class NetworkConnection:
     """Owns one IRC network connection and its background task."""
 
-    def __init__(self, config: NetworkConfig, bus: EventBus) -> None:
+    def __init__(
+        self,
+        config: NetworkConfig,
+        bus: EventBus,
+        *,
+        roster: ChannelRoster | None = None,
+    ) -> None:
         self.config = config
         self._bus = bus
+        self._roster = roster
         self._task: asyncio.Task[None] | None = None
 
         client_kwargs: dict[str, Any] = {
@@ -290,6 +376,7 @@ class NetworkConnection:
             "autojoin": list(config.channels),
             "protocol": config.protocol,
             "auth": config.auth,
+            "roster": roster,
         }
 
         auth = config.auth
@@ -369,6 +456,9 @@ class NetworkConnection:
         await self._client.part(channel, reason)
 
     def channel_users(self, channel: str) -> list[str]:
+        if self._roster is not None:
+            return sorted((u.nick for u in self._roster.users(self.config.name, channel)),
+                          key=str.lower)
         info = self._client.channels.get(channel)
         if not info:
             return []
