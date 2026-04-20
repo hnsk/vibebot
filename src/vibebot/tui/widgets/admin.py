@@ -25,7 +25,7 @@ class AdminTables(Container):
 
     def on_mount(self) -> None:
         for tid, columns in (
-            ("admin-networks-table", ("name", "host:port", "tls", "connected", "channels")),
+            ("admin-networks-table", ("name", "host:port", "tls", "connected", "channels", "rate-limit")),
             ("admin-modules-table", ("repo", "name", "enabled", "description")),
             ("admin-repos-table", ("name", "url", "branch", "enabled")),
         ):
@@ -35,12 +35,18 @@ class AdminTables(Container):
         table = self.query_one("#admin-networks-table", DataTable)
         table.clear()
         for n in rows:
+            rl = n.get("rate_limit") or {}
+            if rl.get("enabled") is False:
+                rl_cell = "[red]DISABLED[/red]"
+            else:
+                rl_cell = f"{rl.get('burst', 5)}/{rl.get('period', 2.0)}s"
             table.add_row(
                 n.get("name", ""),
                 f"{n.get('host', '')}:{n.get('port', '')}",
                 str(n.get("tls", "")),
                 str(n.get("connected", "")),
                 ",".join(n.get("channels", []) or []),
+                rl_cell,
             )
 
     def fill_modules(self, rows: list[dict]) -> None:

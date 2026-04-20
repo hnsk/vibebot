@@ -17,10 +17,12 @@ from vibebot.config import (
     NickServAuthConfig,
     NoAuthConfig,
     QAuthConfig,
+    RateLimitConfig,
     SaslAuthConfig,
     ServerConfig,
 )
 from vibebot.core.events import Event, EventBus
+from vibebot.core.rate_limiter import BucketOverflow, TokenBucket
 from vibebot.core.roster import ChannelRoster
 
 log = logging.getLogger(__name__)
@@ -393,6 +395,12 @@ class NetworkConnection:
         self._task: asyncio.Task[None] | None = None
         self._client: _Client | None = None
         self._current_server: ServerConfig | None = None
+        rl = config.rate_limit
+        self._bucket = TokenBucket(
+            burst=rl.burst,
+            period=rl.period,
+            enabled=rl.enabled,
+        )
 
     @property
     def name(self) -> str:
@@ -570,6 +578,15 @@ class NetworkConnection:
     async def send_message(self, target: str, message: str) -> None:
         if self._client is None:
             raise RuntimeError(f"{self.config.name}: not connected")
+        try:
+            await self._bucket.acquire()
+        except BucketOverflow as exc:
+            await self._bus.publish(Event(
+                kind="rate_limit_drop",
+                network=self.config.name,
+                payload={"target": target, "preview": message[:80], "reason": str(exc)},
+            ))
+            raise
         if message.startswith("\x01ACTION ") and message.endswith("\x01"):
             body = message[len("\x01ACTION "):-1]
             await self._client.ctcp(target, "ACTION", body)
@@ -579,7 +596,32 @@ class NetworkConnection:
     async def send_raw(self, command: str, *params: str) -> None:
         if self._client is None:
             raise RuntimeError(f"{self.config.name}: not connected")
+        try:
+            await self._bucket.acquire()
+        except BucketOverflow as exc:
+            await self._bus.publish(Event(
+                kind="rate_limit_drop",
+                network=self.config.name,
+                payload={"command": command, "params": list(params), "reason": str(exc)},
+            ))
+            raise
         await self._client.rawmsg(command, *params)
+
+    async def apply_rate_limit(self, rl: RateLimitConfig) -> None:
+        """Apply a new RateLimitConfig live. Emits a warning event on disable."""
+        was_enabled = self._bucket.enabled
+        self._bucket.update(burst=rl.burst, period=rl.period, enabled=rl.enabled)
+        self.config.rate_limit = rl
+        if was_enabled and not rl.enabled:
+            log.warning(
+                "%s: outgoing rate limiting DISABLED — risk of server-side flood kill",
+                self.config.name,
+            )
+            await self._bus.publish(Event(
+                kind="rate_limit_disabled_warning",
+                network=self.config.name,
+                payload={"burst": rl.burst, "period": rl.period},
+            ))
 
     async def join(self, channel: str) -> None:
         if self._client is None:

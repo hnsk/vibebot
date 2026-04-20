@@ -241,6 +241,18 @@ class VibebotTui(App):
                     self._state.networks = {n["name"]: n for n in nets}
                 except httpx.HTTPError:
                     pass
+            if event.kind == "rate_limit_disabled_warning":
+                self.notify(
+                    f"{event.network}: outgoing rate limit DISABLED — risk of server flood kill",
+                    severity="warning",
+                    timeout=10,
+                )
+            elif event.kind == "rate_limit_drop":
+                target = event.payload.get("target") or event.payload.get("command") or "?"
+                self.notify(
+                    f"{event.network}: rate-limit queue overflow — dropped msg to {target}",
+                    severity="error",
+                )
             self._rebuild_tree()
 
     # ------------------------------------------------------------------

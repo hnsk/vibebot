@@ -76,6 +76,14 @@ class ServerConfig(BaseModel):
     is_default: bool = False
 
 
+class RateLimitConfig(BaseModel):
+    """Outgoing-message throttle. Defaults mirror irssi (burst 5, ~2s spacing)."""
+
+    enabled: bool = True
+    burst: int = Field(5, ge=1, le=50)
+    period: float = Field(2.0, ge=0.1, le=30.0)
+
+
 _LEGACY_SERVER_FIELDS = ("host", "port", "tls", "tls_verify")
 
 
@@ -101,6 +109,7 @@ class NetworkConfig(BaseModel):
     hostname: str | None = None
     channels: list[str] = Field(default_factory=list)
     auth: AuthConfig = Field(default_factory=NoAuthConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
     @model_validator(mode="before")
     @classmethod

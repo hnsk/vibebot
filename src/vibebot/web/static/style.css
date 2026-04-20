@@ -1244,8 +1244,19 @@ dialog label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0
 .status-key { color: var(--accent); text-transform: uppercase; letter-spacing: 0.12em; }
 #status-ws.online { color: var(--ok); }
 #status-ws.offline { color: var(--err); }
-#footer-status.err { color: var(--err); }
-#footer-status.ok  { color: var(--ok); }
+#footer-status.err  { color: var(--err); }
+#footer-status.ok   { color: var(--ok); }
+#footer-status.warn { color: var(--warn); }
+
+.settings-warning {
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 0.9em;
+  border-radius: 4px;
+}
 
 /* ============================================================
    Responsive

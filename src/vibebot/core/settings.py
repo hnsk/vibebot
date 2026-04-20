@@ -16,6 +16,7 @@ from vibebot.config import (
     Config,
     ConfigWriteError,
     NetworkConfig,
+    RateLimitConfig,
     ServerConfig,
     load_config,
     save_config,
@@ -103,6 +104,7 @@ class SettingsService:
         hostname: str | None = None,
         protocol: str | None = None,
         auth: dict[str, Any] | None = None,
+        rate_limit: dict[str, Any] | None = None,
         reconnect: bool = False,
     ) -> NetworkConfig:
         async with self._lock:
@@ -132,6 +134,15 @@ class SettingsService:
                 new_auth = _coerce_auth(auth)
                 cfg.auth = new_auth
                 needs_reconnect = True
+            if rate_limit is not None:
+                try:
+                    new_rl = RateLimitConfig.model_validate(rate_limit)
+                except Exception as exc:
+                    raise SettingsError(f"invalid rate_limit: {exc}") from exc
+                if conn is not None:
+                    await conn.apply_rate_limit(new_rl)
+                else:
+                    cfg.rate_limit = new_rl
 
             if reconnect and needs_reconnect and conn is not None and conn.connected:
                 await conn.reconnect()
@@ -276,6 +287,7 @@ class SettingsService:
             await self._reconcile_networks(new_cfg)
             self._bot.config = new_cfg
             await self._notify("config_reloaded", path=str(self._config_path))
+            await self.warn_disabled_rate_limits()
 
     async def _reconcile_networks(self, new_cfg: Config) -> None:
         """Apply `new_cfg.networks` to the live runtime.
@@ -308,6 +320,20 @@ class SettingsService:
             if n.name == name:
                 return n
         raise SettingsError(f"unknown network {name!r}")
+
+    async def warn_disabled_rate_limits(self) -> None:
+        """Log + publish a warning for each network that has rate limiting disabled."""
+        for net in self._bot.config.networks:
+            if not net.rate_limit.enabled:
+                log.warning(
+                    "%s: outgoing rate limiting is DISABLED in config — risk of server-side flood kill",
+                    net.name,
+                )
+                await self._bot.bus.publish(Event(
+                    kind="rate_limit_disabled_warning",
+                    network=net.name,
+                    payload={"burst": net.rate_limit.burst, "period": net.rate_limit.period},
+                ))
 
     async def _notify(self, kind: str, **payload: Any) -> None:
         if kind in ("config_saved", "config_reloaded"):

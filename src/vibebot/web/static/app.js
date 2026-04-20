@@ -192,7 +192,7 @@
     const el = $("footer-status");
     if (!el) return;
     el.textContent = msg;
-    el.classList.remove("ok", "err");
+    el.classList.remove("ok", "err", "warn");
     if (kind) el.classList.add(kind);
   }
 
@@ -1638,6 +1638,13 @@
         // Fire-and-forget: only refresh when the Settings tab is the active view.
         if (state.view === "settings") refreshSettingsPanel();
         break;
+      case "rate_limit_disabled_warning":
+        setStatus(`${net}: outgoing rate limit is DISABLED — server may kill the bot`, "warn");
+        if (state.view === "settings") refreshSettingsPanel();
+        break;
+      case "rate_limit_drop":
+        setStatus(`${net}: rate-limit queue overflow — dropped message to ${p.target || p.command || "?"}`, "err");
+        break;
       default:
         break;
     }
@@ -1801,10 +1808,45 @@
           <button type="submit">Add channel</button>
         </form>
       </section>
+
+      <section class="settings-card" id="settings-ratelimit-card">
+        <header class="settings-card-head">
+          <h3>Outgoing rate limit</h3>
+          <span class="muted">token bucket — protects against server flood-kill</span>
+        </header>
+        ${renderRateLimitWarning(net.rate_limit || {})}
+        <form id="settings-ratelimit-form" class="settings-form">
+          <div class="form-grid">
+            <label class="chk">
+              <input type="checkbox" name="rl_enabled"${(net.rate_limit && net.rate_limit.enabled !== false) ? " checked" : ""}>
+              enabled
+            </label>
+            <label>Burst
+              <input name="rl_burst" type="number" min="1" max="50" value="${(net.rate_limit && net.rate_limit.burst) || 5}" required>
+            </label>
+            <label>Period (s)
+              <input name="rl_period" type="number" min="0.1" max="30" step="0.1" value="${(net.rate_limit && net.rate_limit.period) || 2.0}" required>
+            </label>
+          </div>
+          <p class="muted form-hint">
+            Defaults (burst 5, period 2s) match irssi. Disabling risks a K-line on strict networks (Libera, OFTC).
+          </p>
+          <div class="form-actions">
+            <button type="submit">Apply</button>
+          </div>
+        </form>
+      </section>
     `;
     renderAuthExtra(net.auth || { method: "none" });
     renderServerRows(net);
     renderChannelRows(net);
+  }
+
+  function renderRateLimitWarning(rl) {
+    if (rl.enabled === false) {
+      return '<div class="settings-warning">⚠ Rate limiting is DISABLED on this network — server may kill or K-line the bot on high-traffic bursts.</div>';
+    }
+    return "";
   }
 
   function renderAuthExtra(auth) {
@@ -1963,6 +2005,30 @@
     } catch (err) {
       setStatus(err.message, "err");
     }
+  }
+
+  async function settingsApplyRateLimit(form) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const enabled = !!form.elements["rl_enabled"].checked;
+    if (!enabled) {
+      const ok = window.confirm(
+        "Disable outgoing rate limiting? IRC servers may kill or K-line the bot under bursty traffic."
+      );
+      if (!ok) return;
+    }
+    const body = {
+      rate_limit: {
+        enabled,
+        burst: parseInt(form.elements["rl_burst"].value || "5", 10),
+        period: parseFloat(form.elements["rl_period"].value || "2.0"),
+      },
+    };
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}`, { method: "PATCH", body });
+      setStatus(`${name}: rate limit updated`, enabled ? "ok" : "warn");
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
   }
 
   async function settingsAddServer(form) {
@@ -2249,6 +2315,7 @@
       }
       else if (ev.target.id === "settings-add-server-form") { ev.preventDefault(); settingsAddServer(ev.target); }
       else if (ev.target.id === "settings-add-channel-form") { ev.preventDefault(); settingsAddChannel(ev.target); }
+      else if (ev.target.id === "settings-ratelimit-form") { ev.preventDefault(); settingsApplyRateLimit(ev.target); }
       else if (ev.target.id === "settings-create-form") { ev.preventDefault(); settingsCreateSubmit(ev.target); }
       else if (ev.target.classList && ev.target.classList.contains("server-edit-form")) {
         ev.preventDefault();

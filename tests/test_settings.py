@@ -15,11 +15,13 @@ from vibebot.config import (
     Config,
     ConfigWriteError,
     NetworkConfig,
+    RateLimitConfig,
     ServerConfig,
     load_config,
     save_config,
 )
 from vibebot.core.bot import VibeBot
+from vibebot.core.events import Event
 from vibebot.core.network import NetworkConnection
 from vibebot.core.settings import SettingsError
 
@@ -205,6 +207,11 @@ class _FakeNetwork:
     async def apply_channels(self, desired: list[str]) -> None:
         self.channels_applied.append(list(desired))
 
+    async def apply_rate_limit(self, rl: Any) -> None:
+        self.rate_limit_calls = getattr(self, "rate_limit_calls", [])
+        self.rate_limit_calls.append(rl)
+        self.config.rate_limit = rl
+
 
 @pytest.fixture
 def bot_with_fake_network(monkeypatch: pytest.MonkeyPatch):
@@ -290,6 +297,39 @@ async def test_settings_reconnect_without_changes(bot_with_fake_network) -> None
     await bot.settings.reconnect("net1")
     # _FakeNetwork.reconnect cycles stop→start; final state is started again.
     assert fake.started is True
+
+
+async def test_settings_update_rate_limit_applies_live(bot_with_fake_network) -> None:
+    bot, fake = bot_with_fake_network
+    await fake.start()
+    await bot.settings.update_network(
+        "net1", rate_limit={"enabled": False, "burst": 3, "period": 1.5}
+    )
+    assert fake.rate_limit_calls, "apply_rate_limit must be invoked"
+    applied = fake.rate_limit_calls[-1]
+    assert applied.enabled is False
+    assert applied.burst == 3
+    assert applied.period == 1.5
+
+
+async def test_settings_update_rate_limit_rejects_invalid(bot_with_fake_network) -> None:
+    bot, _ = bot_with_fake_network
+    with pytest.raises(SettingsError):
+        await bot.settings.update_network("net1", rate_limit={"burst": 0})
+
+
+async def test_warn_disabled_rate_limits_fires_event(bot_with_fake_network) -> None:
+    bot, _ = bot_with_fake_network
+    bot.config.networks[0].rate_limit = RateLimitConfig(enabled=False, burst=5, period=2.0)
+    warnings: list[Event] = []
+
+    async def _collect(event: Event) -> None:
+        warnings.append(event)
+
+    bot.bus.subscribe("rate_limit_disabled_warning", _collect)
+    await bot.settings.warn_disabled_rate_limits()
+    assert len(warnings) == 1
+    assert warnings[0].network == "net1"
 
 
 async def test_settings_reconnect_missing_raises(bot_with_fake_network) -> None:

@@ -25,6 +25,7 @@ class NetworkPatch(BaseModel):
     hostname: str | None = None
     protocol: str | None = None
     auth: dict[str, Any] | None = None
+    rate_limit: dict[str, Any] | None = None
     reconnect: bool = False
 
 
@@ -84,6 +85,7 @@ async def patch_network(name: str, body: NetworkPatch, request: Request) -> dict
             hostname=body.hostname,
             protocol=body.protocol,
             auth=body.auth,
+            rate_limit=body.rate_limit,
             reconnect=body.reconnect,
         )
     except SettingsError as exc:

@@ -13,8 +13,10 @@ from vibebot.config import (
     NickServAuthConfig,
     NoAuthConfig,
     QAuthConfig,
+    RateLimitConfig,
     SaslAuthConfig,
     load_config,
+    save_config,
 )
 
 
@@ -84,3 +86,35 @@ def test_roundtrip():
     ])
     reloaded = Config.model_validate(src.model_dump())
     assert isinstance(reloaded.networks[0].auth, QAuthConfig)
+
+
+def test_rate_limit_defaults():
+    net = NetworkConfig(name="n", host="h", nick="bot")
+    assert net.rate_limit.enabled is True
+    assert net.rate_limit.burst == 5
+    assert net.rate_limit.period == 2.0
+
+
+def test_rate_limit_validation():
+    with pytest.raises(ValidationError):
+        NetworkConfig(name="n", host="h", nick="bot", rate_limit={"burst": 0})
+    with pytest.raises(ValidationError):
+        NetworkConfig(name="n", host="h", nick="bot", rate_limit={"period": 0})
+
+
+def test_rate_limit_toml_roundtrip(tmp_path):
+    cfg = Config(networks=[
+        NetworkConfig(
+            name="n",
+            host="h",
+            nick="bot",
+            rate_limit=RateLimitConfig(enabled=False, burst=3, period=1.5),
+        )
+    ])
+    path = tmp_path / "rt.toml"
+    save_config(path, cfg)
+    reloaded = load_config(path)
+    rl = reloaded.networks[0].rate_limit
+    assert rl.enabled is False
+    assert rl.burst == 3
+    assert rl.period == 1.5

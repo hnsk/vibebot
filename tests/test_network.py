@@ -12,9 +12,10 @@ from vibebot.config import (
     NickServAuthConfig,
     NoAuthConfig,
     QAuthConfig,
+    RateLimitConfig,
     SaslAuthConfig,
 )
-from vibebot.core.events import EventBus
+from vibebot.core.events import Event, EventBus
 from vibebot.core.network import NetworkConnection
 
 
@@ -28,7 +29,13 @@ async def _wait_until(predicate, timeout: float = 3.0, interval: float = 0.02) -
     raise TimeoutError("condition not met in time")
 
 
-def _cfg(port: int, auth=None, protocol: str = "ircv3", channels: list[str] | None = None) -> NetworkConfig:
+def _cfg(
+    port: int,
+    auth=None,
+    protocol: str = "ircv3",
+    channels: list[str] | None = None,
+    rate_limit: RateLimitConfig | None = None,
+) -> NetworkConfig:
     return NetworkConfig(
         name="mock",
         host="127.0.0.1",
@@ -38,6 +45,7 @@ def _cfg(port: int, auth=None, protocol: str = "ircv3", channels: list[str] | No
         nick="vibebot",
         channels=channels or [],
         auth=auth or NoAuthConfig(),
+        rate_limit=rate_limit or RateLimitConfig(),
     )
 
 
@@ -144,6 +152,68 @@ async def test_nickserv_sends_identify():
             pm = next(m for m in sess.received if m.command == "PRIVMSG")
             assert pm.params[0] == "NickServ"
             assert pm.params[1] == "IDENTIFY bot pw"
+        finally:
+            await conn.stop()
+    finally:
+        await ircd.stop()
+
+
+async def test_outgoing_rate_limit_paces_bursts():
+    ircd = MockIrcd()
+    await ircd.start()
+    try:
+        cfg = _cfg(ircd.port, rate_limit=RateLimitConfig(enabled=True, burst=3, period=0.2))
+        conn, _ = await _run_conn(cfg)
+        try:
+            await _wait_until(lambda: any(s.registered for s in ircd.sessions))
+            start = asyncio.get_event_loop().time()
+            for i in range(6):
+                await conn.send_message("#chan", f"msg{i}")
+            elapsed = asyncio.get_event_loop().time() - start
+            # Burst of 3 is instant; remaining 3 each wait ~period (0.2s) → >=0.6s total.
+            assert elapsed >= 0.55, f"burst of 6 with period=0.2 should take >=0.55s, got {elapsed:.3f}"
+            assert elapsed < 1.5, f"should not exceed 1.5s, got {elapsed:.3f}"
+
+            sess = ircd.sessions[0]
+            # All six must arrive on the wire after throttling.
+            await _wait_until(
+                lambda: len([m for m in sess.received if m.command == "PRIVMSG" and m.params and m.params[0] == "#chan"]) == 6,
+                timeout=2.0,
+            )
+        finally:
+            await conn.stop()
+    finally:
+        await ircd.stop()
+
+
+async def test_apply_rate_limit_disabled_emits_warning_and_bypasses():
+    ircd = MockIrcd()
+    await ircd.start()
+    try:
+        cfg = _cfg(ircd.port, rate_limit=RateLimitConfig(enabled=True, burst=1, period=30.0))
+        bus = EventBus()
+        conn = NetworkConnection(cfg, bus)
+        warnings: list[Event] = []
+
+        async def on_warn(event: Event) -> None:
+            warnings.append(event)
+
+        bus.subscribe("rate_limit_disabled_warning", on_warn)
+        await conn.start()
+        try:
+            await _wait_until(lambda: any(s.registered for s in ircd.sessions))
+            await conn.send_message("#chan", "first")  # consumes the single token
+
+            await conn.apply_rate_limit(RateLimitConfig(enabled=False, burst=1, period=30.0))
+            assert warnings, "disabling the limiter should publish rate_limit_disabled_warning"
+            assert warnings[0].network == "mock"
+
+            start = asyncio.get_event_loop().time()
+            for i in range(10):
+                await conn.send_message("#chan", f"fast{i}")
+            elapsed = asyncio.get_event_loop().time() - start
+            # With bucket disabled the 10 sends complete immediately.
+            assert elapsed < 0.2, f"disabled limiter should be instant, got {elapsed:.3f}"
         finally:
             await conn.stop()
     finally:

@@ -57,6 +57,7 @@ class VibeBot:
         await self.scheduler.start()
         await self.schedules.rehydrate()
         await self._start_networks()
+        await self.settings.warn_disabled_rate_limits()
         await self.modules.reload_all()
         self._api_task = asyncio.create_task(self._run_api(), name="api")
         self._install_signal_handlers()
