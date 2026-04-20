@@ -34,16 +34,45 @@ async def list_modules(request: Request) -> list[dict]:
         scheduled_task_count = len(m.job_ids)
         user_schedule_count = user_counts.get((m.repo, m.name), 0)
         handler_count = sum(1 for k in handler_keys if k[0] == m.repo and k[1] == m.name)
+        triggers = [
+            {
+                "kind": t.kind,
+                "match": t.match.describe(),
+                "source": t.source,
+                "excludes": [p.pattern for p in t.excludes],
+            }
+            for t in bot.modules.triggers_for(m.repo, m.name)
+        ]
         out.append(
             {
                 "repo": m.repo,
                 "name": m.name,
                 "enabled": m.enabled,
+                "state": "enabled" if m.enabled else "disabled",
                 "description": m.instance.description,
                 "scheduled_task_count": scheduled_task_count,
                 "user_schedule_count": user_schedule_count,
                 "handler_count": handler_count,
                 "implements_schedules": (scheduled_task_count + handler_count) > 0,
+                "triggers": triggers,
+                "error_message": None,
+            }
+        )
+    for avail in await bot.modules.list_available():
+        err = avail.get("error_message")
+        out.append(
+            {
+                "repo": avail["repo"],
+                "name": avail["name"],
+                "enabled": False,
+                "state": "error" if err else "unloaded",
+                "description": avail.get("description", ""),
+                "scheduled_task_count": 0,
+                "user_schedule_count": 0,
+                "handler_count": 0,
+                "implements_schedules": False,
+                "triggers": [],
+                "error_message": err,
             }
         )
     return out

@@ -264,6 +264,79 @@ class ModuleManager:
     def list_loaded(self) -> list[LoadedModule]:
         return list(self._loaded.values())
 
+    def triggers_for(self, repo: str, name: str) -> list[Trigger]:
+        return self._registry.triggers_for_module(repo, name)
+
+    async def list_available(self) -> list[dict[str, Any]]:
+        """Discover modules present on disk or recorded in the DB that are not
+        currently loaded. Each entry: ``{repo, name, description, error_message}``.
+        Description is extracted via a class-attribute probe; if the probe raises,
+        the error message is captured and description is empty.
+        """
+        loaded_keys = set(self._loaded.keys())
+        out: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set(loaded_keys)
+
+        # built-ins on disk
+        package = importlib.import_module(BUILTIN_PACKAGE)
+        package_path = Path(package.__file__).parent if package.__file__ else None
+        if package_path is not None:
+            for entry in sorted(package_path.iterdir()):
+                if entry.name.startswith("_") or not entry.name.endswith(".py"):
+                    continue
+                module_name = entry.stem
+                key = (BUILTIN_REPO, module_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                desc, err = _probe_module_meta(f"{BUILTIN_PACKAGE}.{module_name}", None)
+                out.append({"repo": BUILTIN_REPO, "name": module_name,
+                            "description": desc, "error_message": err})
+
+        # repo modules on disk
+        root = self.bot.repos.root
+        if root.exists():
+            for repo_dir in sorted(root.iterdir()):
+                if not repo_dir.is_dir() or repo_dir.name.startswith("."):
+                    continue
+                for mod_dir in sorted(repo_dir.iterdir()):
+                    if not mod_dir.is_dir() or mod_dir.name.startswith("."):
+                        continue
+                    entry_file = mod_dir / "__init__.py"
+                    if not entry_file.exists():
+                        continue
+                    key = (repo_dir.name, mod_dir.name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    qualified = f"vibebot_module.{repo_dir.name}.{mod_dir.name}"
+                    desc, err = _probe_module_meta(qualified, entry_file)
+                    out.append({"repo": repo_dir.name, "name": mod_dir.name,
+                                "description": desc, "error_message": err})
+
+        # DB rows for unloaded modules — pick up prior last_error, include rows
+        # whose source may no longer exist on disk (so the operator can see them).
+        async with self.bot.db.session() as s:
+            rows = list(
+                (await s.execute(
+                    select(ModuleState).where(ModuleState.loaded.is_(False))
+                )).scalars()
+            )
+        existing_idx = {(d["repo"], d["name"]): d for d in out}
+        for row in rows:
+            key = (row.repo_name, row.module_name)
+            if key in loaded_keys:
+                continue
+            if key in existing_idx:
+                if row.last_error and not existing_idx[key]["error_message"]:
+                    existing_idx[key]["error_message"] = row.last_error
+                continue
+            out.append({
+                "repo": row.repo_name, "name": row.module_name,
+                "description": "", "error_message": row.last_error,
+            })
+        return out
+
     # ---------- bus bridge ----------
 
     async def _dispatch(self, event: Event) -> None:
@@ -388,6 +461,34 @@ def _format_validation_error(exc: ValidationError) -> str:
         loc = ".".join(str(p) for p in err.get("loc", ())) or "<root>"
         parts.append(f"{loc}: {err.get('msg', 'invalid')}")
     return "; ".join(parts)
+
+
+def _probe_module_meta(qualified: str, entry_file: Path | None) -> tuple[str, str | None]:
+    """Reflect a module's description without instantiating it.
+
+    Reuses ``sys.modules[qualified]`` if present; otherwise does a lightweight
+    import. Any exception during the probe is swallowed and returned as the
+    error message so the UI can surface it. The imported module is left in
+    ``sys.modules`` — a subsequent real ``load()`` re-execs cleanly.
+    """
+    try:
+        py = sys.modules.get(qualified)
+        if py is None:
+            if entry_file is not None:
+                spec = importlib.util.spec_from_file_location(qualified, entry_file)
+                if spec is None or spec.loader is None:
+                    return "", f"cannot load spec for {qualified}"
+                py = importlib.util.module_from_spec(spec)
+                sys.modules[qualified] = py
+                spec.loader.exec_module(py)
+            else:
+                py = importlib.import_module(qualified)
+        cls = _find_module_class(py)
+        if cls is None:
+            return "", "no Module subclass found"
+        return cls.description or "", None
+    except Exception as exc:
+        return "", f"{type(exc).__name__}: {exc}"
 
 
 def _find_module_class(python_module: ModuleType) -> type[Module] | None:

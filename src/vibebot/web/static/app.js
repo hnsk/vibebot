@@ -786,35 +786,73 @@
       const implements_ = m.implements_schedules || tasks > 0 || userScheds > 0;
       const repo = escapeAttr(m.repo);
       const name = escapeAttr(m.name);
-      const enabled = !!m.enabled;
-      const statusPill = enabled
-        ? `<span class="status-pill is-on">enabled</span>`
-        : `<span class="status-pill is-off">disabled</span>`;
+      const state = m.state || (m.enabled ? "enabled" : "disabled");
+      const isLoaded = state === "enabled" || state === "disabled";
+      const enabled = state === "enabled";
+      const dotLabel = state === "error"
+        ? `error: ${m.error_message || "unknown"}`
+        : state;
+      const dotGlyph = state === "error" ? "⚠" : "";
+      const dot = `<span class="mod-dot is-${escapeAttr(state)}" title="${escapeAttr(dotLabel)}">${dotGlyph}</span>`;
+      const triggers = Array.isArray(m.triggers) ? m.triggers : [];
+      const trigCount = triggers.length;
+      const triggerBlob = triggers.map((t) =>
+        `${t.kind || ""} ${t.match || ""} ${t.source || ""}`.toLowerCase()
+      ).join(" | ");
+      const trigCell = isLoaded && trigCount > 0
+        ? `<button class="mod-trig-badge" data-action="toggle-triggers" data-repo="${repo}" data-name="${name}" title="Show registered triggers">⚡ ${trigCount}</button>`
+        : `<span class="muted">—</span>`;
       const schedCell = total > 0
         ? `<span class="module-sched-badge" title="${tasks} task${tasks === 1 ? "" : "s"} · ${userScheds} user schedule${userScheds === 1 ? "" : "s"}">⏱ ${total}</span>`
         : `<span class="muted">—</span>`;
-      const toggleBtn = enabled
-        ? `<button class="mod-btn is-disable" data-action="disable" data-repo="${repo}" data-name="${name}" title="Stop running this module">Disable</button>`
-        : `<button class="mod-btn is-enable" data-action="enable" data-repo="${repo}" data-name="${name}" title="Start running this module">Enable</button>`;
-      const schedBtn = implements_
-        ? `<button class="mod-btn is-info" data-action="open-schedules" data-repo="${repo}" data-name="${name}">Schedules</button>`
-        : "";
-      const desc = m.description
-        ? `<td class="mod-cell-desc">${escapeHtml(m.description)}</td>`
-        : `<td class="mod-cell-desc is-empty">no description</td>`;
-      return `<tr data-module-card data-repo="${repo}" data-name="${name}">
-        <td class="mod-cell-name"><span class="mod-repo">${escapeHtml(m.repo)}</span><span class="mod-sep">/</span><span class="mod-name">${escapeHtml(m.name)}</span></td>
-        <td class="mod-cell-status">${statusPill}</td>
-        ${desc}
-        <td class="mod-cell-sched">${schedCell}</td>
-        <td class="mod-cell-actions"><div class="mod-actions">
-          ${toggleBtn}
+      let actions;
+      if (isLoaded) {
+        const toggleBtn = enabled
+          ? `<button class="mod-btn is-disable" data-action="disable" data-repo="${repo}" data-name="${name}" title="Stop running this module">Disable</button>`
+          : `<button class="mod-btn is-enable" data-action="enable" data-repo="${repo}" data-name="${name}" title="Start running this module">Enable</button>`;
+        const schedBtn = implements_
+          ? `<button class="mod-btn is-info" data-action="open-schedules" data-repo="${repo}" data-name="${name}">Schedules</button>`
+          : "";
+        actions = `${toggleBtn}
           <button class="mod-btn is-neutral" data-action="reload" data-repo="${repo}" data-name="${name}">Reload</button>
           <button class="mod-btn is-info" data-action="open-settings" data-repo="${repo}" data-name="${name}">Settings</button>
           ${schedBtn}
-          <button class="mod-btn is-danger" data-action="unload" data-repo="${repo}" data-name="${name}">Unload</button>
-        </div></td>
-      </tr>`;
+          <button class="mod-btn is-danger" data-action="unload" data-repo="${repo}" data-name="${name}">Unload</button>`;
+      } else {
+        actions = `<button class="mod-btn is-enable" data-action="load" data-repo="${repo}" data-name="${name}" title="Load this module">Load</button>
+          <button class="mod-btn is-info" data-action="open-settings" data-repo="${repo}" data-name="${name}">Settings</button>`;
+      }
+      let descInner;
+      if (state === "error" && m.error_message) {
+        descInner = `<span class="mod-cell-error">${escapeHtml(m.error_message)}</span>`;
+      } else if (m.description) {
+        descInner = escapeHtml(m.description);
+      } else {
+        descInner = `<span class="muted">no description</span>`;
+      }
+      const descCell = `<td class="mod-cell-desc${m.description || state === "error" ? "" : " is-empty"}">${descInner}</td>`;
+      const searchHay = `${m.repo}/${m.name} ${triggerBlob}`.toLowerCase();
+      const triggerRows = triggers.map((t) => {
+        const excludes = Array.isArray(t.excludes) && t.excludes.length
+          ? `<span class="mod-trig-excl">excl: ${escapeHtml(t.excludes.join(", "))}</span>`
+          : "";
+        return `<li class="mod-trig-item">
+          <span class="mod-trig-kind">${escapeHtml(t.kind || "")}</span>
+          <span class="mod-trig-match">${escapeHtml(t.match || "")}</span>
+          <span class="mod-trig-source">${escapeHtml(t.source || "")}</span>
+          ${excludes}
+        </li>`;
+      }).join("");
+      const subRow = trigCount > 0
+        ? `<tr class="mod-triggers-row is-hidden" data-triggers-for="${repo}/${name}"><td colspan="5"><ul class="mod-trig-list">${triggerRows}</ul></td></tr>`
+        : "";
+      return `<tr data-module-card data-repo="${repo}" data-name="${name}" data-state="${escapeAttr(state)}" data-search="${escapeAttr(searchHay)}" data-trigger-blob="${escapeAttr(triggerBlob)}">
+        <td class="mod-cell-name">${dot}<span class="mod-repo">${escapeHtml(m.repo)}</span><span class="mod-sep">/</span><span class="mod-name">${escapeHtml(m.name)}</span></td>
+        ${descCell}
+        <td class="mod-cell-triggers">${trigCell}</td>
+        <td class="mod-cell-sched">${schedCell}</td>
+        <td class="mod-cell-actions"><div class="mod-actions">${actions}</div></td>
+      </tr>${subRow}`;
     },
     repo(r) {
       return `<div class="card">
@@ -1240,7 +1278,7 @@
 
   const templateWrappers = {
     module: (rows) => `<table class="modules-table"><thead><tr>
-        <th>Module</th><th>Status</th><th>Description</th><th>Schedules</th><th>Actions</th>
+        <th>Module</th><th>Description</th><th>Triggers</th><th>Schedules</th><th>Actions</th>
       </tr></thead><tbody>${rows}</tbody></table>`,
   };
 
@@ -1256,9 +1294,54 @@
       const rows = data.map(tpl).join("");
       const wrap = templateWrappers[el.dataset.template] || ((r) => `<div class="row">${r}</div>`);
       el.innerHTML = wrap(rows);
+      if (el.dataset.template === "module") applyModulesFilter();
     } catch (err) {
       el.innerHTML = `<div class="rail-empty">Error: ${escapeHtml(err.message)}</div>`;
     }
+  }
+
+  function toggleTriggersRow(btn) {
+    const repo = btn.dataset.repo;
+    const name = btn.dataset.name;
+    const key = `${repo}/${name}`;
+    const tbody = btn.closest("tbody");
+    if (!tbody) return;
+    const target = tbody.querySelector(`tr.mod-triggers-row[data-triggers-for="${CSS.escape(key)}"]`);
+    if (!target) return;
+    const opening = target.classList.contains("is-hidden");
+    tbody.querySelectorAll("tr.mod-triggers-row").forEach((r) => {
+      if (r !== target) r.classList.add("is-hidden");
+    });
+    target.classList.toggle("is-hidden", !opening);
+  }
+
+  function applyModulesFilter() {
+    const input = document.getElementById("modules-filter");
+    const q = (input?.value || "").trim().toLowerCase();
+    document.querySelectorAll(".modules-table tbody tr[data-module-card]").forEach((row) => {
+      const hay = row.dataset.search || "";
+      const subRow = row.nextElementSibling?.classList?.contains("mod-triggers-row")
+        ? row.nextElementSibling : null;
+      if (!q) {
+        row.classList.remove("is-hidden");
+        if (subRow) subRow.classList.add("is-hidden");
+        return;
+      }
+      const hit = hay.includes(q);
+      row.classList.toggle("is-hidden", !hit);
+      if (subRow) {
+        const trigBlob = row.dataset.triggerBlob || "";
+        const trigHit = hit && trigBlob.includes(q) && !`${row.dataset.repo}/${row.dataset.name}`.toLowerCase().includes(q);
+        subRow.classList.toggle("is-hidden", !trigHit);
+      }
+    });
+  }
+
+  function wireModulesFilter() {
+    const input = document.getElementById("modules-filter");
+    if (!input || input.dataset.wired) return;
+    input.dataset.wired = "1";
+    input.addEventListener("input", applyModulesFilter);
   }
 
   function refreshAdminPanels() {
@@ -2940,6 +3023,10 @@
       if (!b) return;
       const action = b.dataset.action;
       if (action === "toggle-net") return;
+      if (action === "toggle-triggers") {
+        toggleTriggersRow(b);
+        return;
+      }
       try {
         if (action === "pull-repo") {
           await pullRepo(b);
@@ -3000,7 +3087,7 @@
           await api("/api/repos/" + encodeURIComponent(b.dataset.name), { method: "DELETE" });
         } else if (action === "delete-acl") {
           await api("/api/acl/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
-        } else if (["enable", "disable", "reload", "unload"].includes(action)) {
+        } else if (["load", "enable", "disable", "reload", "unload"].includes(action)) {
           await api("/api/modules/" + action, { method: "POST", body: { repo: b.dataset.repo, name: b.dataset.name } });
         } else if (action === "open-settings") {
           await openModuleSettings(b);
@@ -3167,6 +3254,7 @@
     wireModuleSchedulesDialog();
     wireScheduleEditDialog();
     wireSchedulesPage();
+    wireModulesFilter();
     updateAuthBadge();
     if (!state.token) {
       setStatus("Set an API token to populate panels.", "err");

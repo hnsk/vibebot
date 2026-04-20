@@ -54,7 +54,10 @@
 
 <section class="view view-modules" data-view="modules">
   <div class="panel">
-    <h2 class="panel-title">Modules</h2>
+    <div class="modules-head">
+      <h2 class="panel-title">Modules</h2>
+      <input type="search" id="modules-filter" class="modules-filter" placeholder="Search modules / triggers…" autocomplete="off">
+    </div>
     <div data-api="/api/modules" data-template="module"></div>
   </div>
 </section>
