@@ -30,6 +30,54 @@ from vibebot.core.roster import ChannelRoster
 log = logging.getLogger(__name__)
 
 
+def _parse_mode_diff(
+    modes: list[str], behaviour: dict[str, set[str]] | None
+) -> list[tuple[str, str, str | None]]:
+    """Parse a MODE param list into ``(direction, letter, arg|None)`` tuples.
+
+    ``modes`` is the wire representation as pydle received it (e.g.
+    ``["+o-v", "alice", "bob"]``). ``behaviour`` maps mode-type names
+    (``"param"``, ``"param_set"``, ``"list"``, ``"noparam"``) to the sets of
+    mode letters that fall into each category. Falls back to treating unknown
+    letters as no-parameter.
+    """
+    from pydle.features.rfc1459 import protocol as rfc_protocol
+
+    param_types = {
+        rfc_protocol.BEHAVIOUR_PARAMETER,
+        rfc_protocol.BEHAVIOUR_LIST,
+    }
+    param_on_set = rfc_protocol.BEHAVIOUR_PARAMETER_ON_SET
+    items = list(modes)
+    out: list[tuple[str, str, str | None]] = []
+    i = 0
+    while i < len(items):
+        piece = items[i]
+        add = True
+        for ch in piece:
+            if ch == "+":
+                add = True
+                continue
+            if ch == "-":
+                add = False
+                continue
+            mode_type = rfc_protocol.BEHAVIOUR_NO_PARAMETER
+            if behaviour:
+                for btype, letters in behaviour.items():
+                    if ch in letters:
+                        mode_type = btype
+                        break
+            needs_arg = mode_type in param_types or (
+                mode_type == param_on_set and add
+            )
+            arg: str | None = None
+            if needs_arg and i + 1 < len(items):
+                arg = items.pop(i + 1)
+            out.append(("+" if add else "-", ch, arg))
+        i += 1
+    return out
+
+
 class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     """pydle client with protocol toggle, inline auth dispatch, and EventBus bridge."""
 
@@ -261,13 +309,31 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         # stays in sync without re-parsing raw MODE args here.
         if self._vb_roster is not None:
             self._vb_roster.sync_modes_from_client(self._network_name, channel, self)
+        raw_modes = list(modes)
+        parsed = _parse_mode_diff(raw_modes, getattr(self, "_channel_modes_behaviour", None))
         await self._publish(
             "mode",
             channel=channel,
-            modes=list(modes),
+            modes=raw_modes,
+            modes_parsed=parsed,
             by=by,
             by_ident=bmeta["ident"],
             by_host=bmeta["host"],
+        )
+
+    async def on_ctcp(self, by: str, target: str, what: str, contents: str) -> None:  # type: ignore[override]
+        # Fire for every CTCP request (including ACTION). The UI-facing
+        # `message` event for ACTION is emitted separately by on_ctcp_action.
+        await super().on_ctcp(by, target, what, contents)
+        meta = self._user_meta(by)
+        await self._publish(
+            "ctcp",
+            source=by,
+            target=target,
+            ctcp_type=(what or "").upper(),
+            contents=contents or "",
+            source_ident=meta["ident"],
+            source_host=meta["host"],
         )
 
     async def on_topic_change(self, channel: str, message: str, by: str | None) -> None:  # type: ignore[override]
@@ -572,7 +638,7 @@ class NetworkConnection:
                         )
                     except asyncio.CancelledError:
                         raise
-                    except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                    except (TimeoutError, OSError, ConnectionError) as exc:
                         log.warning(
                             "%s: server %s:%s failed (%s), trying next",
                             self.config.name, server.host, server.port, exc,

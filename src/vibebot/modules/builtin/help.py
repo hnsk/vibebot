@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 from vibebot.core.events import Event
-from vibebot.modules.base import Module
+from vibebot.modules.base import Module, on_message
 
 
 class HelpModule(Module):
     name = "help"
     description = "Reply to !help with the list of loaded modules."
 
-    async def on_message(self, event: Event) -> None:
-        message: str = event.get("message", "")
-        if not message.startswith("!help"):
-            return
+    @on_message(startswith="!help")
+    async def handle_help(self, event: Event) -> None:
         target: str = event.get("target", "")
         source: str = event.get("source", "")
         if not target:

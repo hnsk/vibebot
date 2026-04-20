@@ -94,15 +94,19 @@ class RemindMeModule(Module):
 
     async def on_load(self) -> None:
         self.register_handler("remind", self._fire)
+        # Command is settings-driven → register dynamically. Module reload
+        # refreshes the trigger when the operator edits it.
+        cmd = re.escape(self.settings.command)
+        self.register_trigger(
+            "message",
+            handler=self.handle_message,
+            regex=rf"^\s*{cmd}(?:\s|$)",
+        )
 
-    async def on_message(self, event: Event) -> None:
+    async def handle_message(self, event: Event) -> None:
         message: str = event.get("message", "")
-        if not message:
-            return
         stripped = message.strip()
         command: str = self.settings.command
-        if not (stripped == command or stripped.startswith(command + " ")):
-            return
 
         source: str = event.get("source", "")
         target: str = event.get("target", "")

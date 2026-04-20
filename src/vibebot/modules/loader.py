@@ -19,6 +19,11 @@ from sqlalchemy import select
 from vibebot.core.events import Event
 from vibebot.core.guard import guard_callback, spawn_guarded
 from vibebot.modules.base import Module
+from vibebot.modules.triggers import (
+    DISPATCH_KINDS,
+    Trigger,
+    TriggerRegistry,
+)
 from vibebot.storage.models import ModuleState
 
 if TYPE_CHECKING:
@@ -46,9 +51,9 @@ class ModuleManager:
     def __init__(self, bot: VibeBot) -> None:
         self.bot = bot
         self._loaded: dict[tuple[str, str], LoadedModule] = {}
-        bot.bus.subscribe("message", self._on_message)
-        for kind in ("join", "part", "kick", "nick", "connect"):
-            bot.bus.subscribe(kind, self._on_event)
+        self._registry = TriggerRegistry()
+        for kind in DISPATCH_KINDS:
+            bot.bus.subscribe(kind, self._dispatch)
 
     # ---------- lifecycle ----------
 
@@ -149,16 +154,75 @@ class ModuleManager:
             log.exception("Module %s/%s on_load failed", repo, name)
         loaded = LoadedModule(repo=repo, name=name, instance=instance, python_module=python_module)
         loaded.job_ids = await self._register_scheduled(repo, name, instance)
+        self._register_triggers(repo, name, instance, cls)
         self._loaded[(repo, name)] = loaded
         await self._upsert_state(repo, name, loaded=True, enabled=True, last_error=None)
         log.info("Loaded module %s/%s", repo, name)
         return loaded
+
+    def _register_triggers(
+        self, repo: str, name: str, instance: Module, cls: type[Module]
+    ) -> None:
+        """Collect decorator-declared + pending triggers and register them."""
+        registered = 0
+        seen: set[int] = set()
+        for klass in cls.__mro__:
+            if klass is object:
+                continue
+            for attr_name, attr in klass.__dict__.items():
+                descriptors = getattr(attr, "_vb_triggers", None)
+                if not descriptors:
+                    continue
+                if id(attr) in seen:
+                    continue
+                seen.add(id(attr))
+                bound = getattr(instance, attr_name)
+                for desc in descriptors:
+                    trig = Trigger(
+                        kind=desc.kind,
+                        match=desc.match,
+                        excludes=desc.excludes,
+                        handler=bound,
+                        repo=repo,
+                        name=name,
+                        source="decorator",
+                    )
+                    self._registry.register(trig)
+                    registered += 1
+                    log.info(
+                        "module %s/%s trigger %s %s",
+                        repo, name, desc.kind, desc.match.describe(),
+                    )
+        for desc, handler in instance._pending_triggers:
+            trig = Trigger(
+                kind=desc.kind,
+                match=desc.match,
+                excludes=desc.excludes,
+                handler=handler,
+                repo=repo,
+                name=name,
+                source="dynamic",
+            )
+            self._registry.register(trig)
+            registered += 1
+            log.info(
+                "module %s/%s trigger %s %s (dynamic)",
+                repo, name, desc.kind, desc.match.describe(),
+            )
+        instance._pending_triggers.clear()
+        if registered == 0:
+            log.warning(
+                "module %s/%s registered zero triggers — it will never be invoked",
+                repo, name,
+            )
 
     async def unload(self, repo: str, name: str) -> None:
         key = (repo, name)
         loaded = self._loaded.pop(key, None)
         if loaded is None:
             return
+        # Clear triggers FIRST so an in-flight event cannot dispatch mid-teardown.
+        self._registry.remove_for_module(repo, name)
         for job_id in loaded.job_ids:
             self.bot.scheduler.remove_job(job_id)
         self.bot.schedules.unregister_handlers_for(repo, name)
@@ -180,6 +244,7 @@ class ModuleManager:
         if loaded is None:
             raise ValueError(f"Module {repo}/{name} not loaded")
         loaded.enabled = True
+        self._registry.set_enabled(repo, name, True)
         for job_id in loaded.job_ids:
             self.bot.scheduler.resume_job(job_id)
         await self._upsert_state(repo, name, loaded=True, enabled=True)
@@ -189,6 +254,7 @@ class ModuleManager:
         if loaded is None:
             raise ValueError(f"Module {repo}/{name} not loaded")
         loaded.enabled = False
+        self._registry.set_enabled(repo, name, False)
         for job_id in loaded.job_ids:
             self.bot.scheduler.pause_job(job_id)
         await self._upsert_state(repo, name, loaded=True, enabled=False)
@@ -198,26 +264,22 @@ class ModuleManager:
     def list_loaded(self) -> list[LoadedModule]:
         return list(self._loaded.values())
 
-    # ---------- bus bridges ----------
+    # ---------- bus bridge ----------
 
-    async def _on_message(self, event: Event) -> None:
+    async def _dispatch(self, event: Event) -> None:
         # Skip pydle-synthesized outbound echoes — otherwise a module that
         # replies to its own trigger loops forever.
-        own = self.bot._own_nick_of(event.network)
-        if own and event.get("source") == own:
-            return
-        for loaded in self._loaded.values():
-            if not loaded.enabled:
-                continue
-            handler = guard_callback(loaded.name, loaded.instance.on_message)
-            spawn_guarded(loaded.name, handler(event), name=f"{loaded.name}:on_message")
-
-    async def _on_event(self, event: Event) -> None:
-        for loaded in self._loaded.values():
-            if not loaded.enabled:
-                continue
-            handler = guard_callback(loaded.name, loaded.instance.on_event)
-            spawn_guarded(loaded.name, handler(event), name=f"{loaded.name}:on_event")
+        if event.kind == "message":
+            own = self.bot._own_nick_of(event.network)
+            if own and event.get("source") == own:
+                return
+        for trig in self._registry.match(event):
+            handler = guard_callback(trig.name, trig.handler)
+            spawn_guarded(
+                trig.name,
+                handler(event),
+                name=f"{trig.repo}/{trig.name}:{trig.kind}",
+            )
 
     # ---------- persistence ----------
 

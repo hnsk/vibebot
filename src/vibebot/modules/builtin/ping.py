@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from vibebot.core.events import Event
-from vibebot.modules.base import Module
+from vibebot.modules.base import Module, on_message
 
 
 class PingSettings(BaseModel):
@@ -17,10 +17,8 @@ class PingModule(Module):
     description = "Reply to !ping with a configurable response."
     Settings = PingSettings
 
-    async def on_message(self, event: Event) -> None:
-        message: str = event.get("message", "")
-        if message.strip() != "!ping":
-            return
+    @on_message(exact="!ping")
+    async def handle_ping(self, event: Event) -> None:
         target: str = event.get("target", "")
         source: str = event.get("source", "")
         reply_to = target if target.startswith("#") else source

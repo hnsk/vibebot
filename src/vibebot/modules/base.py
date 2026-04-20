@@ -2,15 +2,49 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 from vibebot.core.events import Event
+from vibebot.modules.decorators import (
+    on_connect,
+    on_ctcp,
+    on_join,
+    on_kick,
+    on_message,
+    on_mode,
+    on_nick,
+    on_part,
+    on_quit,
+    on_topic,
+)
 from vibebot.modules.settings import sanitize_segment
+from vibebot.modules.triggers import (
+    ModeMatch,
+    TriggerDescriptor,
+    TriggerKind,
+    build_match,
+    compile_excludes,
+)
+
+__all__ = [
+    "Module",
+    "ScheduledTask",
+    "on_connect",
+    "on_ctcp",
+    "on_join",
+    "on_kick",
+    "on_message",
+    "on_mode",
+    "on_nick",
+    "on_part",
+    "on_quit",
+    "on_topic",
+]
 
 if TYPE_CHECKING:
     from vibebot.core.bot import VibeBot
@@ -52,6 +86,11 @@ class Module:
         self.settings: Any = None
         self._repo: str = ""
         self._name: str = ""
+        # Drained by ModuleManager after on_load; holds settings-driven triggers
+        # as (descriptor, handler) pairs.
+        self._pending_triggers: list[
+            tuple[TriggerDescriptor, Callable[[Event], Awaitable[None]]]
+        ] = []
 
     @property
     def data_dir(self) -> Path:
@@ -77,11 +116,56 @@ class Module:
     async def on_unload(self) -> None:
         """Called once when the module is unloaded."""
 
-    async def on_message(self, event: Event) -> None:
-        """Channel or private message received."""
+    def register_trigger(
+        self,
+        kind: TriggerKind,
+        *,
+        handler: Callable[[Event], Awaitable[None]],
+        regex: str | None = None,
+        startswith: str | None = None,
+        exact: str | None = None,
+        predicate: Callable[[Event], bool] | None = None,
+        ctcp_type: str | None = None,
+        mode_letters: Sequence[str] | None = None,
+        mode_direction: Literal["+", "-", "*"] = "*",
+        excludes: Sequence[str] = (),
+        field: str = "message",
+        case_sensitive: bool = True,
+    ) -> None:
+        """Register a trigger dynamically. Call from ``on_load`` when the
+        trigger depends on ``self.settings``; module reload refreshes it.
 
-    async def on_event(self, event: Event) -> None:
-        """Any other IRC event (join, part, kick, nick, connect)."""
+        For ``kind='mode'`` this always produces a ``ModeMatch`` — pass
+        ``mode_letters``/``mode_direction`` to narrow it.
+        """
+        if kind == "mode":
+            match = ModeMatch(
+                letters=frozenset(mode_letters) if mode_letters is not None else None,
+                direction=mode_direction,
+            )
+        else:
+            match = build_match(
+                regex=regex,
+                startswith=startswith,
+                exact=exact,
+                predicate=predicate,
+                ctcp_type=ctcp_type,
+                field=field,
+                case_sensitive=case_sensitive,
+                always=(
+                    regex is None
+                    and startswith is None
+                    and exact is None
+                    and predicate is None
+                    and ctcp_type is None
+                ),
+            )
+        descriptor = TriggerDescriptor(
+            kind=kind,
+            match=match,
+            excludes=compile_excludes(excludes),
+        )
+        self._pending_triggers.append((descriptor, handler))
 
     def scheduled_tasks(self) -> list[ScheduledTask]:
         """Return scheduled tasks this module wants APScheduler to run."""

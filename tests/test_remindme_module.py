@@ -17,7 +17,6 @@ from vibebot.modules.builtin.remindme import (
     parse_duration,
 )
 
-
 # ------------------------------- parser --------------------------------------
 
 
@@ -116,12 +115,17 @@ async def bot(tmp_path: Path):
         await b.db.close()
 
 
-async def _install_module(bot: VibeBot, conn: _FakeConn) -> RemindMeModule:
+async def _install_module(
+    bot: VibeBot, conn: _FakeConn, *, settings: RemindMeSettings | None = None
+) -> RemindMeModule:
     module = RemindMeModule(bot)
     module._repo = "__builtin__"
     module._name = "remindme"
-    module.settings = RemindMeSettings()
+    module.settings = settings or RemindMeSettings()
     await module.on_load()
+    bot.modules._register_triggers(
+        "__builtin__", "remindme", module, RemindMeModule
+    )
     bot.networks["mock"] = conn  # type: ignore[assignment]
     return module
 
@@ -138,7 +142,7 @@ async def test_command_schedules_reminder(bot: VibeBot) -> None:
     conn = _FakeConn()
     module = await _install_module(bot, conn)
 
-    await module.on_message(_event("!remindme 1h hello world"))
+    await module.handle_message(_event("!remindme 1h hello world"))
 
     schedules = await bot.schedules.list()
     assert len(schedules) == 1
@@ -167,7 +171,7 @@ async def test_pm_reminder_replies_to_sender(bot: VibeBot) -> None:
     module = await _install_module(bot, conn)
 
     # PM: target is the bot's nick (non-channel); reply should go back to alice.
-    await module.on_message(
+    await module.handle_message(
         _event("!remindme 5m private note", target="vibebot")
     )
 
@@ -223,7 +227,7 @@ async def test_long_form_duration_two_tokens(bot: VibeBot) -> None:
     conn = _FakeConn()
     module = await _install_module(bot, conn)
 
-    await module.on_message(_event("!remindme 1 day stand up"))
+    await module.handle_message(_event("!remindme 1 day stand up"))
 
     schedules = await bot.schedules.list()
     assert len(schedules) == 1
@@ -234,7 +238,7 @@ async def test_invalid_duration_replies_usage(bot: VibeBot) -> None:
     conn = _FakeConn()
     module = await _install_module(bot, conn)
 
-    await module.on_message(_event("!remindme xyz hello"))
+    await module.handle_message(_event("!remindme xyz hello"))
 
     assert await bot.schedules.list() == []
     assert conn.sent
@@ -245,37 +249,35 @@ async def test_missing_message_replies_usage(bot: VibeBot) -> None:
     conn = _FakeConn()
     module = await _install_module(bot, conn)
 
-    await module.on_message(_event("!remindme 1h"))
+    await module.handle_message(_event("!remindme 1h"))
 
     assert await bot.schedules.list() == []
     assert conn.sent
     assert "usage" in conn.sent[0][1].lower()
 
 
-async def test_wrong_prefix_ignored(bot: VibeBot) -> None:
+async def test_wrong_prefix_ignored_by_trigger(bot: VibeBot) -> None:
+    """Non-matching messages are filtered at the trigger level, never reach the handler."""
     conn = _FakeConn()
-    module = await _install_module(bot, conn)
-
-    await module.on_message(_event("!notremindme 1h hi"))
-    await module.on_message(_event("hello world"))
-
-    assert await bot.schedules.list() == []
-    assert conn.sent == []
+    await _install_module(bot, conn)
+    registry = bot.modules._registry
+    assert list(registry.match(_event("!notremindme 1h hi"))) == []
+    assert list(registry.match(_event("hello world"))) == []
 
 
 async def test_custom_command_setting(bot: VibeBot) -> None:
     conn = _FakeConn()
-    module = RemindMeModule(bot)
-    module._repo = "__builtin__"
-    module._name = "remindme"
-    module.settings = RemindMeSettings(command="!rem")
-    await module.on_load()
-    bot.networks["mock"] = conn  # type: ignore[assignment]
+    module = await _install_module(
+        bot, conn, settings=RemindMeSettings(command="!rem")
+    )
 
-    await module.on_message(_event("!remindme 1h ignored"))
-    assert await bot.schedules.list() == []
+    # Default command should no longer match the registered trigger.
+    registry = bot.modules._registry
+    assert list(registry.match(_event("!remindme 1h ignored"))) == []
 
-    await module.on_message(_event("!rem 1h works"))
+    # New command matches and the handler schedules the reminder.
+    assert list(registry.match(_event("!rem 1h works"))) != []
+    await module.handle_message(_event("!rem 1h works"))
     schedules = await bot.schedules.list()
     assert len(schedules) == 1
     assert schedules[0].payload["message"] == "works"
