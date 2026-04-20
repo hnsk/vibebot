@@ -24,7 +24,7 @@
   --line-soft: #181b21;
   --fg:        #e6e3da;
   --fg-soft:   #b6b1a4;
-  --muted:     #6b6f78;
+  --muted:     #9aa1ab;
   --accent:    #ffb454;   /* amber phosphor */
   --accent-2:  #5fc4ff;   /* cyan link */
   --ok:        #7fe3a4;
@@ -47,7 +47,7 @@
   --line-soft: #e6dfcc;
   --fg:        #1a1714;
   --fg-soft:   #3a342b;
-  --muted:     #7a7263;
+  --muted:     #52493b;
   --accent:    #b85c00;   /* burnt orange ink */
   --accent-2:  #006a8e;
   --ok:        #2c7a3d;
@@ -2136,6 +2136,160 @@ dialog label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0
   .server-edit-form { grid-template-columns: 1fr 80px; }
   .settings-global-bar { justify-content: flex-start; }
   .settings-save-feedback { text-align: left; }
+}
+
+/* ============================================================
+   Modules table (admin view)
+   ============================================================ */
+
+.modules-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8rem;
+}
+.modules-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.modules-table tbody td {
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+.modules-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.modules-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.mod-cell-name {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--fg);
+}
+.mod-cell-name .mod-repo { color: var(--accent); }
+.mod-cell-name .mod-sep  { color: var(--muted); margin: 0 0.15rem; }
+.mod-cell-name .mod-name { color: var(--fg); }
+.mod-cell-desc {
+  color: var(--fg-soft);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  max-width: 36rem;
+}
+.mod-cell-desc.is-empty { color: var(--muted); font-style: italic; }
+.mod-cell-sched { white-space: nowrap; text-align: center; }
+.mod-cell-sched .muted { font-size: 0.78rem; }
+.mod-cell-actions { width: 1%; white-space: nowrap; }
+.mod-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.mod-btn {
+  font: inherit;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  background: var(--bg-deep);
+  color: var(--fg-soft);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color var(--tx), border-color var(--tx), background var(--tx);
+}
+.mod-btn:hover { color: var(--accent); border-color: var(--accent); }
+.mod-btn:disabled { opacity: 0.55; cursor: progress; }
+.mod-btn.is-enable {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg-deep));
+}
+.mod-btn.is-enable:hover {
+  background: color-mix(in srgb, var(--ok) 26%, var(--bg-deep));
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.mod-btn.is-disable {
+  color: var(--err);
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err) 14%, var(--bg-deep));
+}
+.mod-btn.is-disable:hover {
+  background: color-mix(in srgb, var(--err) 26%, var(--bg-deep));
+  color: var(--err);
+  border-color: var(--err);
+}
+.mod-btn.is-neutral {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-deep));
+}
+.mod-btn.is-neutral:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-deep));
+  border-color: var(--accent);
+}
+.mod-btn.is-info {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-deep));
+}
+.mod-btn.is-info:hover {
+  background: color-mix(in srgb, var(--accent-2) 22%, var(--bg-deep));
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+.mod-btn.is-danger {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 45%, var(--line));
+  background: var(--bg-deep);
+}
+.mod-btn.is-danger:hover {
+  background: color-mix(in srgb, var(--err) 18%, var(--bg-deep));
+  border-color: var(--err);
+}
+.status-pill.is-on {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg-deep));
+}
+.status-pill.is-off {
+  color: var(--muted);
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--muted) 12%, var(--bg-deep));
+}
+@media (max-width: 720px) {
+  .modules-table thead { display: none; }
+  .modules-table, .modules-table tbody, .modules-table tr, .modules-table td {
+    display: block;
+    width: 100%;
+  }
+  .modules-table tbody tr {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 0.6rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--panel-2);
+  }
+  .modules-table tbody td {
+    border-bottom: none;
+    padding: 0.25rem 0;
+  }
+  .mod-cell-actions { width: auto; }
+  .mod-actions { justify-content: flex-start; }
 }
 
 /* ============================================================

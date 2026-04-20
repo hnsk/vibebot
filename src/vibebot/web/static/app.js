@@ -784,23 +784,37 @@
       const userScheds = Number(m.user_schedule_count) || 0;
       const total = tasks + userScheds;
       const implements_ = m.implements_schedules || tasks > 0 || userScheds > 0;
-      const badge = total > 0
+      const repo = escapeAttr(m.repo);
+      const name = escapeAttr(m.name);
+      const enabled = !!m.enabled;
+      const statusPill = enabled
+        ? `<span class="status-pill is-on">enabled</span>`
+        : `<span class="status-pill is-off">disabled</span>`;
+      const schedCell = total > 0
         ? `<span class="module-sched-badge" title="${tasks} task${tasks === 1 ? "" : "s"} · ${userScheds} user schedule${userScheds === 1 ? "" : "s"}">⏱ ${total}</span>`
-        : "";
+        : `<span class="muted">—</span>`;
+      const toggleBtn = enabled
+        ? `<button class="mod-btn is-disable" data-action="disable" data-repo="${repo}" data-name="${name}" title="Stop running this module">Disable</button>`
+        : `<button class="mod-btn is-enable" data-action="enable" data-repo="${repo}" data-name="${name}" title="Start running this module">Enable</button>`;
       const schedBtn = implements_
-        ? `<button data-action="open-schedules" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Schedules</button>`
+        ? `<button class="mod-btn is-info" data-action="open-schedules" data-repo="${repo}" data-name="${name}">Schedules</button>`
         : "";
-      return `<div class="card" data-module-card data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">
-        <h3>${escapeHtml(m.repo)}/${escapeHtml(m.name)}${badge}</h3>
-        <div class="muted">${escapeHtml(m.description || "(no description)")} — ${m.enabled ? "enabled" : "disabled"}</div>
-        <div class="actions">
-          <button data-action="${m.enabled ? "disable" : "enable"}" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">${m.enabled ? "Disable" : "Enable"}</button>
-          <button data-action="reload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Reload</button>
-          <button data-action="unload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Unload</button>
-          <button data-action="open-settings" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Settings</button>
+      const desc = m.description
+        ? `<td class="mod-cell-desc">${escapeHtml(m.description)}</td>`
+        : `<td class="mod-cell-desc is-empty">no description</td>`;
+      return `<tr data-module-card data-repo="${repo}" data-name="${name}">
+        <td class="mod-cell-name"><span class="mod-repo">${escapeHtml(m.repo)}</span><span class="mod-sep">/</span><span class="mod-name">${escapeHtml(m.name)}</span></td>
+        <td class="mod-cell-status">${statusPill}</td>
+        ${desc}
+        <td class="mod-cell-sched">${schedCell}</td>
+        <td class="mod-cell-actions"><div class="mod-actions">
+          ${toggleBtn}
+          <button class="mod-btn is-neutral" data-action="reload" data-repo="${repo}" data-name="${name}">Reload</button>
+          <button class="mod-btn is-info" data-action="open-settings" data-repo="${repo}" data-name="${name}">Settings</button>
           ${schedBtn}
-        </div>
-      </div>`;
+          <button class="mod-btn is-danger" data-action="unload" data-repo="${repo}" data-name="${name}">Unload</button>
+        </div></td>
+      </tr>`;
     },
     repo(r) {
       return `<div class="card">
@@ -1224,6 +1238,12 @@
     if (refresh) refresh.addEventListener("click", () => loadSchedulesPage());
   }
 
+  const templateWrappers = {
+    module: (rows) => `<table class="modules-table"><thead><tr>
+        <th>Module</th><th>Status</th><th>Description</th><th>Schedules</th><th>Actions</th>
+      </tr></thead><tbody>${rows}</tbody></table>`,
+  };
+
   async function loadAdminPanel(el) {
     const tpl = renderers[el.dataset.template];
     if (!tpl) return;
@@ -1233,7 +1253,9 @@
         el.innerHTML = `<div class="rail-empty">none</div>`;
         return;
       }
-      el.innerHTML = `<div class="row">${data.map(tpl).join("")}</div>`;
+      const rows = data.map(tpl).join("");
+      const wrap = templateWrappers[el.dataset.template] || ((r) => `<div class="row">${r}</div>`);
+      el.innerHTML = wrap(rows);
     } catch (err) {
       el.innerHTML = `<div class="rail-empty">Error: ${escapeHtml(err.message)}</div>`;
     }
