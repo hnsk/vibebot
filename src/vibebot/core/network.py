@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
+import socket
 from typing import Any
 
 import pydle
@@ -371,6 +373,48 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         await self._publish("disconnect", expected=expected)
 
 
+async def _resolve_bind_address(
+    value: str, server_host: str
+) -> tuple[str, int] | None:
+    """Turn a hostname/IP into a ``(ip, 0)`` tuple suitable for ``source_address``.
+
+    IP literals (v4/v6) are returned unchanged. DNS names are resolved to an IP
+    whose family matches the server's (so the kernel's ``bind()`` won't refuse
+    the pair at connect time); if the server is dual-stack we prefer a matching
+    family but fall back to the other. Returns ``None`` when resolution fails or
+    no compatible IP is found — caller should then connect unbound.
+    """
+    try:
+        ipaddress.ip_address(value)
+        return (value, 0)
+    except ValueError:
+        pass
+
+    loop = asyncio.get_running_loop()
+    try:
+        server_infos = await loop.getaddrinfo(
+            server_host, None, type=socket.SOCK_STREAM
+        )
+    except socket.gaierror:
+        server_infos = []
+    server_families = [info[0] for info in server_infos]
+    preferred = server_families[0] if server_families else None
+
+    try:
+        host_infos = await loop.getaddrinfo(value, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None
+    if not host_infos:
+        return None
+
+    if preferred is not None:
+        for family, _type, _proto, _canon, sockaddr in host_infos:
+            if family == preferred:
+                return (sockaddr[0], 0)
+    # No family match (or server family unknown) — take first host result.
+    return (host_infos[0][4][0], 0)
+
+
 class NetworkConnection:
     """Owns one IRC network connection.
 
@@ -449,11 +493,6 @@ class NetworkConnection:
             kwargs["sasl_mechanism"] = auth.mechanism
             if auth.mechanism == "EXTERNAL" and auth.cert_path:
                 kwargs["tls_client_cert"] = auth.cert_path
-        if cfg.hostname:
-            log.debug(
-                "%s: hostname=%r stored; pydle USER command does not expose it (server sets vhost)",
-                cfg.name, cfg.hostname,
-            )
         return _Client(**kwargs)
 
     async def start(self) -> None:
@@ -478,12 +517,28 @@ class NetworkConnection:
                             "%s: dialling %s:%s (tls=%s, default=%s)",
                             self.config.name, server.host, server.port, server.tls, server.is_default,
                         )
-                        await self._client.connect(
-                            hostname=server.host,
-                            port=server.port,
-                            tls=server.tls,
-                            tls_verify=server.tls_verify,
-                        )
+                        connect_kwargs: dict[str, Any] = {
+                            "hostname": server.host,
+                            "port": server.port,
+                            "tls": server.tls,
+                            "tls_verify": server.tls_verify,
+                        }
+                        if self.config.hostname:
+                            bind = await _resolve_bind_address(
+                                self.config.hostname, server.host
+                            )
+                            if bind is not None:
+                                log.info(
+                                    "%s: binding outbound socket to %s (from hostname %r)",
+                                    self.config.name, bind[0], self.config.hostname,
+                                )
+                                connect_kwargs["source_address"] = bind
+                            else:
+                                log.warning(
+                                    "%s: could not resolve hostname %r; connecting via default route",
+                                    self.config.name, self.config.hostname,
+                                )
+                        await self._client.connect(**connect_kwargs)
                         await self._client._vb_disconnected.wait()
                         clean_exit = True
                         break  # intentional disconnect — stop fail-over chain
