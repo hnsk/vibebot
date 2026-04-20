@@ -9,12 +9,14 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from vibebot.api.app import build_app
 from vibebot.config import ApiConfig, BotConfig, Config, RepoConfig
 from vibebot.core.acl import Identity
 from vibebot.core.bot import VibeBot
-from vibebot.scheduler.service import ScheduleError
+from vibebot.scheduler.service import PAST_RETENTION_MAX_ROWS, ScheduleError
+from vibebot.storage.models import Schedule
 
 
 def _make_bot(tmp_path: Path) -> VibeBot:
@@ -230,6 +232,137 @@ async def test_rehydrate_restores_jobs(tmp_path: Path) -> None:
     assert bot2.scheduler.get_job(f"user:{dto.id}") is not None
     await bot2.scheduler.stop()
     await bot2.db.close()
+
+
+async def _insert_schedule_row(
+    bot: VibeBot,
+    *,
+    sid: str,
+    status: str,
+    updated_at: datetime,
+    trigger: str = '{"type":"date","run_date":"2000-01-01T00:00:00+00:00"}',
+) -> None:
+    async with bot.db.session() as s:
+        s.add(
+            Schedule(
+                id=sid,
+                owner_nick="seed",
+                owner_mask="seed!*@*",
+                owner_network=None,
+                repo_name="demo",
+                module_name="m",
+                handler_name="fire",
+                payload_json="{}",
+                trigger_json=trigger,
+                status=status,
+                title=None,
+                misfire_grace_seconds=60,
+                created_at=updated_at,
+                updated_at=updated_at,
+            )
+        )
+        await s.commit()
+
+
+async def _count_schedules(bot: VibeBot, status: str | None = None) -> int:
+    async with bot.db.session() as s:
+        stmt = select(Schedule)
+        if status is not None:
+            stmt = stmt.where(Schedule.status == status)
+        return len(list((await s.execute(stmt)).scalars()))
+
+
+async def test_prune_drops_rows_older_than_24h(running_bot: VibeBot) -> None:
+    now = datetime.now(UTC)
+    await _insert_schedule_row(
+        running_bot, sid="stale", status="completed", updated_at=now - timedelta(hours=25)
+    )
+    await _insert_schedule_row(
+        running_bot, sid="fresh", status="completed", updated_at=now - timedelta(hours=1)
+    )
+    # Active rows must survive even if old (they never become "past").
+    await _insert_schedule_row(
+        running_bot,
+        sid="active-old",
+        status="scheduled",
+        updated_at=now - timedelta(hours=48),
+        trigger='{"type":"interval","seconds":60}',
+    )
+
+    await running_bot.schedules._prune_past_schedules()
+
+    async with running_bot.db.session() as s:
+        remaining = {
+            row.id
+            for row in (await s.execute(select(Schedule))).scalars()
+        }
+    assert "stale" not in remaining
+    assert "fresh" in remaining
+    assert "active-old" in remaining
+
+
+async def test_prune_caps_past_rows_at_max(running_bot: VibeBot) -> None:
+    now = datetime.now(UTC)
+    extra = 5
+    total = PAST_RETENTION_MAX_ROWS + extra
+    for i in range(total):
+        await _insert_schedule_row(
+            running_bot,
+            sid=f"past-{i:03d}",
+            status="completed",
+            # All within 24h; only the row-cap rule should prune them.
+            # `i=0` is the oldest, `i=total-1` the newest.
+            updated_at=now - timedelta(minutes=total - i),
+        )
+
+    await running_bot.schedules._prune_past_schedules()
+
+    async with running_bot.db.session() as s:
+        remaining = sorted(
+            row.id
+            for row in (await s.execute(select(Schedule))).scalars()
+        )
+    assert len(remaining) == PAST_RETENTION_MAX_ROWS
+    # The `extra` oldest rows should be gone.
+    for i in range(extra):
+        assert f"past-{i:03d}" not in remaining
+    assert f"past-{extra:03d}" in remaining
+
+
+async def test_dispatch_triggers_prune(running_bot: VibeBot) -> None:
+    now = datetime.now(UTC)
+    await _insert_schedule_row(
+        running_bot, sid="stale", status="completed", updated_at=now - timedelta(hours=25)
+    )
+
+    done = asyncio.Event()
+
+    async def handler(_payload: dict[str, Any]) -> None:
+        done.set()
+
+    running_bot.schedules.register_handler("demo", "m", "fire", handler)
+    dto = await running_bot.schedules.create(
+        owner_nick="alice",
+        owner_mask="alice!*@*",
+        repo="demo",
+        module="m",
+        handler="fire",
+        trigger={"type": "date", "run_date": datetime.now(UTC) + timedelta(milliseconds=50)},
+    )
+    await asyncio.wait_for(done.wait(), timeout=5.0)
+    # Wait for the post-dispatch prune to settle.
+    ids: set[str] = set()
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        async with running_bot.db.session() as s:
+            ids = {
+                row.id
+                for row in (await s.execute(select(Schedule))).scalars()
+            }
+        if "stale" not in ids:
+            break
+    assert "stale" not in ids
+    assert dto.id in ids
 
 
 # -------- HTTP API --------

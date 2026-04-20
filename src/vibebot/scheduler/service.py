@@ -19,7 +19,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from apscheduler.events import (
@@ -28,7 +28,7 @@ from apscheduler.events import (
     EVENT_JOB_MISSED,
     EVENT_JOB_REMOVED,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from vibebot.core.acl import AclService, Identity
 from vibebot.core.guard import spawn_guarded
@@ -45,6 +45,9 @@ HandlerFn = Callable[[dict[str, Any]], Awaitable[None]]
 ADMIN_PERMISSION = "admin"
 JOB_ID_PREFIX = "user:"
 DEFAULT_PER_OWNER_MAX = 50
+TERMINAL_STATUSES = ("completed", "error", "missed", "cancelled")
+PAST_RETENTION_MAX_AGE_SECONDS = 24 * 3600
+PAST_RETENTION_MAX_ROWS = 100
 
 
 class ScheduleError(Exception):
@@ -514,6 +517,10 @@ class ScheduleService:
             row.updated_at = now
             await s.commit()
         await self._sync_next_run(schedule_id)
+        try:
+            await self._prune_past_schedules()
+        except Exception:
+            log.exception("prune past schedules failed")
 
     def _on_job_event(self, event: Any) -> None:
         """APScheduler listener — updates DB for misses / removals we didn't cause."""
@@ -530,6 +537,7 @@ class ScheduleService:
             )
 
     async def _handle_missed(self, schedule_id: str) -> None:
+        transitioned = False
         async with self._db.session() as s:
             row = (
                 await s.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -542,9 +550,44 @@ class ScheduleService:
                 row.updated_at = datetime.now(UTC)
                 await s.commit()
                 self._scheduler.remove_job(_job_id(schedule_id))
+                transitioned = True
             else:
                 # Recurring: just log; job continues.
                 log.warning("schedule %s missed a fire (grace exceeded)", schedule_id)
+        if transitioned:
+            try:
+                await self._prune_past_schedules()
+            except Exception:
+                log.exception("prune past schedules failed")
+
+    async def _prune_past_schedules(self) -> None:
+        """Delete terminal-state rows older than 24h OR beyond the newest 100."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=PAST_RETENTION_MAX_AGE_SECONDS)
+        async with self._db.session() as s:
+            await s.execute(
+                delete(Schedule).where(
+                    Schedule.status.in_(TERMINAL_STATUSES),
+                    Schedule.updated_at < cutoff,
+                )
+            )
+            keep_ids = list(
+                (
+                    await s.execute(
+                        select(Schedule.id)
+                        .where(Schedule.status.in_(TERMINAL_STATUSES))
+                        .order_by(Schedule.updated_at.desc())
+                        .limit(PAST_RETENTION_MAX_ROWS)
+                    )
+                ).scalars()
+            )
+            if keep_ids:
+                await s.execute(
+                    delete(Schedule).where(
+                        Schedule.status.in_(TERMINAL_STATUSES),
+                        Schedule.id.notin_(keep_ids),
+                    )
+                )
+            await s.commit()
 
 
 def _job_id(schedule_id: str) -> str:
