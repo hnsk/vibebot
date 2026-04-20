@@ -116,7 +116,15 @@ channels = ["#vibebot-test"]
 # enabled = true
 
 [[repos]]
-name = "builtin-extra"
-url = "https://github.com/example/vibebot-modules.git"
+name = "builtin-modules"
+url = "https://github.com/hnsk/vibebot.git"
+subdir = "optional-modules"
 branch = "main"
+enabled = false
+
+[[repos]]
+name = "builtin-modules-dev"
+url = "https://github.com/hnsk/vibebot.git"
+subdir = "optional-modules"
+branch = "dev"
 enabled = false
