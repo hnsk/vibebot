@@ -270,7 +270,7 @@ body {
 }
 
 /* Admin views: centered single panel */
-.view-modules, .view-repos, .view-acl, .view-events {
+.view-modules, .view-repos, .view-acl, .view-events, .view-schedules {
   grid-template-columns: 1fr;
   overflow: auto;
   padding: 1.5rem;
@@ -2264,4 +2264,105 @@ dialog label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0
   color: var(--err);
   border-color: var(--err);
   background: color-mix(in srgb, var(--err) 12%, var(--bg-deep));
+}
+
+/* ---------- top-level Schedules page ---------- */
+
+.schedules-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 1200px;
+}
+.schedules-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 0.75rem;
+}
+.schedules-head .panel-title {
+  margin: 0 0 0.25rem;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.schedules-head .muted {
+  font-size: 0.8rem;
+}
+.schedules-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.schedules-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.schedules-group-head h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+.schedules-group-head .muted {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.schedules-group-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 0 0 0.3rem;
+  font-style: italic;
+}
+.schedule-origin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-deep));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  padding: 0.08rem 0.4rem;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-row .schedule-owner {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.schedule-row .schedule-next {
+  margin-left: auto;
+}
+.schedule-edit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: min(520px, 92vw);
+}
+.stacked-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.stacked-field input,
+.stacked-field select,
+.stacked-field textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 2px;
+}
+.stacked-field textarea {
+  resize: vertical;
 }

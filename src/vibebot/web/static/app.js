@@ -249,6 +249,7 @@
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.view === name));
     if (name === "modules" || name === "repos" || name === "acl") refreshAdminPanels();
     if (name === "settings") refreshSettingsPanel();
+    if (name === "schedules") loadSchedulesPage();
   }
 
   /* ---------------- auth ---------------- */
@@ -858,28 +859,63 @@
   const UPCOMING_SCHEDULE_STATUSES = new Set(["scheduled", "paused"]);
   const PAST_SCHEDULE_LIMIT = 5;
 
-  function renderUserScheduleRow(s) {
+  function renderUserScheduleRow(s, opts = {}) {
     const label = s.title || (s.id ? s.id.slice(0, 8) : "(unnamed)");
     const status = s.status || "scheduled";
+    const canMutate = status === "scheduled" || status === "paused";
     const actions = [];
     if (status === "scheduled") {
       actions.push(`<button data-action="schedule-pause" data-id="${escapeAttr(s.id)}">Pause</button>`);
     } else if (status === "paused") {
       actions.push(`<button data-action="schedule-resume" data-id="${escapeAttr(s.id)}">Resume</button>`);
     }
-    if (status === "scheduled" || status === "paused") {
+    if (canMutate) {
       actions.push(`<button data-action="schedule-run-now" data-id="${escapeAttr(s.id)}">Run now</button>`);
+      if (opts.editable) {
+        actions.push(`<button data-action="schedule-edit" data-id="${escapeAttr(s.id)}">Edit</button>`);
+      }
       actions.push(`<button data-action="schedule-cancel" data-id="${escapeAttr(s.id)}">Cancel</button>`);
     }
     const timeIso = UPCOMING_SCHEDULE_STATUSES.has(status)
       ? (s.next_run_at || "")
       : (s.last_run_at || s.updated_at || "");
+    const origin = opts.includeOrigin
+      ? `<span class="schedule-origin" title="${escapeAttr(`${s.repo}/${s.module}#${s.handler}`)}">${escapeHtml(`${s.repo}/${s.module}`)}</span>`
+      : "";
+    const owner = opts.includeOwner && s.owner_nick
+      ? `<span class="schedule-owner">${escapeHtml(s.owner_nick)}</span>`
+      : "";
     return `
       <li class="schedule-row">
+        ${origin}
         <span class="schedule-name" title="${escapeAttr(s.id)}">${escapeHtml(label)}</span>
         <span class="status-pill is-${escapeAttr(status)}">${escapeHtml(status)}</span>
         <span class="schedule-trigger">${escapeHtml(triggerSummary(s.trigger))}</span>
         <span class="schedule-next" title="${escapeAttr(timeIso)}">${escapeHtml(relTime(timeIso))}</span>
+        ${owner}
+        <span class="schedule-actions">${actions.join("")}</span>
+      </li>`;
+  }
+
+  function renderModuleTaskRow(t) {
+    const paused = !!t.paused;
+    const status = paused ? "paused" : "scheduled";
+    const next = paused ? "paused" : relTime(t.next_run_at);
+    const origin = `<span class="schedule-origin" title="${escapeAttr(t.job_id)}">${escapeHtml(`${t.repo_name}/${t.module_name}`)}</span>`;
+    const actions = [
+      paused
+        ? `<button data-action="module-task-resume" data-job-id="${escapeAttr(t.job_id)}">Resume</button>`
+        : `<button data-action="module-task-pause" data-job-id="${escapeAttr(t.job_id)}">Pause</button>`,
+      `<button data-action="module-task-run-now" data-job-id="${escapeAttr(t.job_id)}">Run now</button>`,
+    ];
+    return `
+      <li class="schedule-row">
+        ${origin}
+        <span class="schedule-name" title="${escapeAttr(t.job_id)}">${escapeHtml(t.task_name)}</span>
+        <span class="status-pill is-${escapeAttr(status)}">${escapeHtml(status)}</span>
+        <span class="schedule-trigger" title="${escapeAttr(t.trigger || "")}">${escapeHtml(t.trigger || "")}</span>
+        <span class="schedule-next" title="${escapeAttr(t.next_run_at || "")}">${escapeHtml(next)}</span>
+        <span class="schedule-owner muted">module</span>
         <span class="schedule-actions">${actions.join("")}</span>
       </li>`;
   }
@@ -1008,6 +1044,184 @@
       if (ev.target.closest("[data-schedules-close]")) { els.dlg.close(); return; }
       if (ev.target === els.dlg) els.dlg.close();
     });
+  }
+
+  /* ---------- Schedules page (top-level tab) ---------- */
+
+  function schedulesPageIsOpen() {
+    return state.view === "schedules";
+  }
+
+  function sortByNextRun(list) {
+    return list.slice().sort((a, b) => {
+      const at = a.next_run_at ? new Date(a.next_run_at).getTime() : Infinity;
+      const bt = b.next_run_at ? new Date(b.next_run_at).getTime() : Infinity;
+      return at - bt;
+    });
+  }
+
+  async function loadSchedulesPage() {
+    const periodicEl = document.getElementById("schedules-periodic");
+    const upcomingEl = document.getElementById("schedules-upcoming");
+    const pastEl = document.getElementById("schedules-past");
+    const summaryEl = document.getElementById("schedules-summary");
+    const pCount = document.getElementById("schedules-periodic-count");
+    const uCount = document.getElementById("schedules-upcoming-count");
+    const xCount = document.getElementById("schedules-past-count");
+    if (!periodicEl || !upcomingEl || !pastEl) return;
+    try {
+      const data = await api("/api/schedules/overview");
+      const moduleTasks = Array.isArray(data.module_tasks) ? data.module_tasks : [];
+      const userSchedules = Array.isArray(data.user_schedules) ? data.user_schedules : [];
+      const upcomingUserAll = userSchedules.filter((s) => UPCOMING_SCHEDULE_STATUSES.has(s.status || "scheduled"));
+      const periodicUser = upcomingUserAll.filter((s) => s.trigger && s.trigger.type !== "date");
+      const upcomingUser = upcomingUserAll.filter((s) => s.trigger && s.trigger.type === "date");
+      const past = userSchedules
+        .filter((s) => !UPCOMING_SCHEDULE_STATUSES.has(s.status || "scheduled"))
+        .sort((a, b) => {
+          const at = new Date(a.last_run_at || a.updated_at || 0).getTime();
+          const bt = new Date(b.last_run_at || b.updated_at || 0).getTime();
+          return bt - at;
+        })
+        .slice(0, PAST_SCHEDULE_LIMIT);
+
+      const periodicRows = [
+        ...sortByNextRun(moduleTasks).map(renderModuleTaskRow),
+        ...sortByNextRun(periodicUser).map((s) => renderUserScheduleRow(s, { includeOrigin: true, includeOwner: true, editable: true })),
+      ];
+      const upcomingRows = sortByNextRun(upcomingUser).map((s) =>
+        renderUserScheduleRow(s, { includeOrigin: true, includeOwner: true, editable: true })
+      );
+      const pastRows = past.map((s) => renderUserScheduleRow(s, { includeOrigin: true, includeOwner: true, editable: false }));
+
+      periodicEl.innerHTML = periodicRows.length
+        ? `<ul class="module-schedules-list">${periodicRows.join("")}</ul>`
+        : `<div class="rail-empty">none</div>`;
+      upcomingEl.innerHTML = upcomingRows.length
+        ? `<ul class="module-schedules-list">${upcomingRows.join("")}</ul>`
+        : `<div class="rail-empty">none</div>`;
+      pastEl.innerHTML = pastRows.length
+        ? `<ul class="module-schedules-list">${pastRows.join("")}</ul>`
+        : `<div class="rail-empty">none</div>`;
+      if (pCount) pCount.textContent = `${moduleTasks.length + periodicUser.length} (${moduleTasks.length} module, ${periodicUser.length} user)`;
+      if (uCount) uCount.textContent = String(upcomingUser.length);
+      if (xCount) xCount.textContent = String(past.length);
+      if (summaryEl) {
+        const totalActive = moduleTasks.length + periodicUser.length + upcomingUser.length;
+        summaryEl.textContent = `${totalActive} active across ${moduleTasks.length} module job${moduleTasks.length === 1 ? "" : "s"}, ${periodicUser.length} recurring user, ${upcomingUser.length} upcoming.`;
+      }
+    } catch (err) {
+      if (summaryEl) summaryEl.textContent = `Error: ${err.message}`;
+      periodicEl.innerHTML = upcomingEl.innerHTML = pastEl.innerHTML = "";
+    }
+  }
+
+  async function refreshSchedulesPageIfOpen() {
+    if (schedulesPageIsOpen()) await loadSchedulesPage();
+  }
+
+  /* ---------- Schedule edit dialog ---------- */
+
+  const scheduleEditState = { id: null };
+
+  function getScheduleEditEls() {
+    return {
+      dlg: document.getElementById("schedule-edit-dialog"),
+      form: document.getElementById("schedule-edit-form"),
+      title: document.getElementById("schedule-edit-title"),
+      sub: document.getElementById("schedule-edit-sub"),
+      err: document.getElementById("schedule-edit-error"),
+      feedback: document.getElementById("schedule-edit-feedback"),
+    };
+  }
+
+  async function openScheduleEditDialog(scheduleId) {
+    const els = getScheduleEditEls();
+    if (!els.dlg || !els.form) return;
+    scheduleEditState.id = scheduleId;
+    els.err.hidden = true;
+    els.err.textContent = "";
+    els.feedback.textContent = "";
+    try {
+      const dto = await api(`/api/schedules/${encodeURIComponent(scheduleId)}`);
+      els.title.textContent = dto.title || scheduleId.slice(0, 8);
+      els.sub.textContent = `${dto.repo}/${dto.module}#${dto.handler} · owner ${dto.owner_nick}`;
+      const trigger = dto.trigger || { type: "date" };
+      const triggerParams = { ...trigger };
+      delete triggerParams.type;
+      els.form.elements["title"].value = dto.title || "";
+      els.form.elements["trigger_type"].value = trigger.type || "date";
+      els.form.elements["trigger_params"].value = JSON.stringify(triggerParams, null, 2);
+      els.form.elements["payload"].value = JSON.stringify(dto.payload || {}, null, 2);
+      if (typeof els.dlg.showModal === "function" && !els.dlg.open) els.dlg.showModal();
+    } catch (err) {
+      setStatus(`load schedule failed: ${err.message}`, "err");
+    }
+  }
+
+  async function submitScheduleEdit(form) {
+    const els = getScheduleEditEls();
+    const id = scheduleEditState.id;
+    if (!id) return;
+    const fd = new FormData(form);
+    const title = String(fd.get("title") || "").trim();
+    const triggerType = String(fd.get("trigger_type") || "date");
+    const triggerParamsRaw = String(fd.get("trigger_params") || "").trim();
+    const payloadRaw = String(fd.get("payload") || "").trim();
+    let triggerParams;
+    let payload;
+    try {
+      triggerParams = triggerParamsRaw ? JSON.parse(triggerParamsRaw) : {};
+      if (typeof triggerParams !== "object" || Array.isArray(triggerParams) || triggerParams === null) {
+        throw new Error("trigger params must be a JSON object");
+      }
+    } catch (e) {
+      els.err.textContent = `Trigger params: ${e.message}`;
+      els.err.hidden = false;
+      return;
+    }
+    try {
+      payload = payloadRaw ? JSON.parse(payloadRaw) : {};
+      if (typeof payload !== "object" || Array.isArray(payload) || payload === null) {
+        throw new Error("payload must be a JSON object");
+      }
+    } catch (e) {
+      els.err.textContent = `Payload: ${e.message}`;
+      els.err.hidden = false;
+      return;
+    }
+    const body = {
+      title: title || null,
+      trigger: { type: triggerType, ...triggerParams },
+      payload,
+    };
+    try {
+      await api(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body });
+      els.dlg.close();
+      await refreshSchedulesPageIfOpen();
+    } catch (err) {
+      els.err.textContent = err.message;
+      els.err.hidden = false;
+    }
+  }
+
+  function wireScheduleEditDialog() {
+    const els = getScheduleEditEls();
+    if (!els.dlg || !els.form) return;
+    els.dlg.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-schedule-edit-close]")) { els.dlg.close(); return; }
+      if (ev.target === els.dlg) els.dlg.close();
+    });
+    els.form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      submitScheduleEdit(els.form);
+    });
+    els.dlg.addEventListener("close", () => { scheduleEditState.id = null; });
+  }
+
+  function wireSchedulesPage() {
+    const refresh = document.getElementById("schedules-refresh");
+    if (refresh) refresh.addEventListener("click", () => loadSchedulesPage());
   }
 
   async function loadAdminPanel(el) {
@@ -2716,25 +2930,48 @@
         if (action === "schedule-pause") {
           await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/pause`, { method: "POST" });
           if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          await refreshSchedulesPageIfOpen();
           preserveScroll(refreshAdminPanels);
           return;
         }
         if (action === "schedule-resume") {
           await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/resume`, { method: "POST" });
           if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          await refreshSchedulesPageIfOpen();
           preserveScroll(refreshAdminPanels);
           return;
         }
         if (action === "schedule-run-now") {
           await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/run-now`, { method: "POST" });
           if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          await refreshSchedulesPageIfOpen();
           return;
         }
         if (action === "schedule-cancel") {
           if (!window.confirm("Cancel this schedule? It will be marked cancelled and stop firing.")) return;
           await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
           if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          await refreshSchedulesPageIfOpen();
           preserveScroll(refreshAdminPanels);
+          return;
+        }
+        if (action === "schedule-edit") {
+          await openScheduleEditDialog(b.dataset.id);
+          return;
+        }
+        if (action === "module-task-pause") {
+          await api("/api/schedules/module-task/pause", { method: "POST", body: { job_id: b.dataset.jobId } });
+          await refreshSchedulesPageIfOpen();
+          return;
+        }
+        if (action === "module-task-resume") {
+          await api("/api/schedules/module-task/resume", { method: "POST", body: { job_id: b.dataset.jobId } });
+          await refreshSchedulesPageIfOpen();
+          return;
+        }
+        if (action === "module-task-run-now") {
+          await api("/api/schedules/module-task/run-now", { method: "POST", body: { job_id: b.dataset.jobId } });
+          await refreshSchedulesPageIfOpen();
           return;
         }
         if (action === "delete-repo") {
@@ -2906,6 +3143,8 @@
     wireSettingsUI();
     wireModuleSettingsDialog();
     wireModuleSchedulesDialog();
+    wireScheduleEditDialog();
+    wireSchedulesPage();
     updateAuthBadge();
     if (!state.token) {
       setStatus("Set an API token to populate panels.", "err");

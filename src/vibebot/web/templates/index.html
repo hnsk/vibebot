@@ -119,6 +119,85 @@
   </div>
 </section>
 
+<section class="view view-schedules" data-view="schedules">
+  <div class="panel schedules-panel">
+    <header class="schedules-head">
+      <div>
+        <h2 class="panel-title">Schedules</h2>
+        <p class="muted" id="schedules-summary">—</p>
+      </div>
+      <button type="button" class="ghost-btn" id="schedules-refresh">Refresh</button>
+    </header>
+    <section class="schedules-group">
+      <header class="schedules-group-head">
+        <h3>Periodic jobs</h3>
+        <span class="muted" id="schedules-periodic-count">0</span>
+      </header>
+      <p class="muted schedules-group-hint">Module-declared and recurring user schedules. Fires on interval or cron.</p>
+      <div id="schedules-periodic" class="module-schedules-list"></div>
+    </section>
+    <section class="schedules-group">
+      <header class="schedules-group-head">
+        <h3>Upcoming tasks</h3>
+        <span class="muted" id="schedules-upcoming-count">0</span>
+      </header>
+      <p class="muted schedules-group-hint">One-off user tasks scheduled to fire once at a specific time.</p>
+      <div id="schedules-upcoming" class="module-schedules-list"></div>
+    </section>
+    <section class="schedules-group">
+      <header class="schedules-group-head">
+        <h3>Recent past</h3>
+        <span class="muted" id="schedules-past-count">0</span>
+      </header>
+      <p class="muted schedules-group-hint">Last 5 completed, errored, missed, or cancelled user schedules.</p>
+      <div id="schedules-past" class="module-schedules-list"></div>
+    </section>
+  </div>
+</section>
+
+<dialog id="schedule-edit-dialog" class="module-settings-dialog" aria-labelledby="schedule-edit-title">
+  <form method="dialog" id="schedule-edit-form" class="module-settings-shell">
+    <header class="module-settings-head">
+      <div>
+        <span class="module-settings-eyebrow">Edit schedule</span>
+        <h2 id="schedule-edit-title" class="module-settings-title">—</h2>
+        <p class="module-settings-sub" id="schedule-edit-sub"></p>
+      </div>
+      <button type="button" class="module-settings-close" data-schedule-edit-close aria-label="Close">✕</button>
+    </header>
+    <div class="module-settings-body schedule-edit-body">
+      <label class="stacked-field">
+        <span>Title</span>
+        <input name="title" autocomplete="off">
+      </label>
+      <label class="stacked-field">
+        <span>Trigger type</span>
+        <select name="trigger_type">
+          <option value="date">date (one-off)</option>
+          <option value="interval">interval</option>
+          <option value="cron">cron</option>
+        </select>
+      </label>
+      <label class="stacked-field">
+        <span>Trigger params (JSON, excluding <code>type</code>)</span>
+        <textarea name="trigger_params" rows="4" spellcheck="false"></textarea>
+      </label>
+      <label class="stacked-field">
+        <span>Payload (JSON)</span>
+        <textarea name="payload" rows="6" spellcheck="false"></textarea>
+      </label>
+      <p class="dialog-error" id="schedule-edit-error" hidden></p>
+    </div>
+    <footer class="module-settings-foot">
+      <span class="module-settings-feedback" id="schedule-edit-feedback" role="status"></span>
+      <div class="module-settings-foot-actions">
+        <button type="button" class="ghost-btn" data-schedule-edit-close>Cancel</button>
+        <button type="submit" value="save" id="schedule-edit-save">Save changes</button>
+      </div>
+    </footer>
+  </form>
+</dialog>
+
 <section class="view view-acl" data-view="acl">
   <div class="panel">
     <h2 class="panel-title">ACL rules</h2>

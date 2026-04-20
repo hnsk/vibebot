@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from vibebot.api.auth import require_token
+from vibebot.api.routes.schedules import module_task_entries
 
 router = APIRouter(prefix="/api/modules", tags=["modules"], dependencies=[Depends(require_token)])
 
@@ -113,21 +114,11 @@ async def module_schedules(repo: str, name: str, request: Request) -> dict:
     )
     if loaded is None:
         raise HTTPException(404, f"module {repo}/{name} not loaded")
-    module_tasks: list[dict] = []
-    for jid in loaded.job_ids:
-        job = bot.scheduler.get_job(jid)
-        if job is None:
-            continue
-        next_run = getattr(job, "next_run_time", None)
-        module_tasks.append(
-            {
-                "task_name": jid.rsplit("/", 1)[-1],
-                "job_id": jid,
-                "trigger": str(job.trigger),
-                "next_run_at": next_run.isoformat() if next_run else None,
-                "paused": next_run is None,
-            }
-        )
+    module_tasks = [
+        {k: v for k, v in entry.items() if k not in ("repo_name", "module_name")}
+        for entry in module_task_entries(bot)
+        if entry["repo_name"] == repo and entry["module_name"] == name
+    ]
     user_items = await bot.schedules.list(repo=repo, module=name)
     return {
         "module_tasks": module_tasks,
