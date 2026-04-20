@@ -105,6 +105,16 @@ channels = ["#vibebot-test"]
 # # no [networks.auth] block → anonymous
 
 # One [[repos]] section per module source repository.
+#
+# First-party optional modules live in the vibebot repo under `optional-modules/`.
+# Register them by pointing at this repo with the matching subdir:
+# [[repos]]
+# name = "vibebot-optional"
+# url = "https://github.com/hnsk/vibebot.git"
+# branch = "main"
+# subdir = "optional-modules"
+# enabled = true
+
 [[repos]]
 name = "builtin-extra"
 url = "https://github.com/example/vibebot-modules.git"

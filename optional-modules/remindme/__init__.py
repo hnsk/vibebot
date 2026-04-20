@@ -1,4 +1,4 @@
-"""Built-in `!remindme` module — schedule personal reminders.
+"""`!remindme` module — schedule personal reminders.
 
 Syntax: ``!remindme <when> <message>`` where ``<when>`` is either a short
 form like ``5m``, ``2h``, ``3d`` (optionally concatenated, e.g. ``1h30m``)
@@ -181,8 +181,8 @@ class RemindMeModule(Module):
                 owner_nick=source,
                 owner_mask=identity.mask(),
                 owner_network=event.network,
-                repo="__builtin__",
-                module="remindme",
+                repo=self._repo,
+                module=self._name,
                 handler="remind",
                 trigger={"type": "date", "run_date": run_date.isoformat()},
                 payload={

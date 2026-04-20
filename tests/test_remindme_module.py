@@ -1,7 +1,9 @@
-"""Tests for the built-in !remindme module."""
+"""Tests for the !remindme optional module."""
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,12 +12,27 @@ import pytest
 from vibebot.config import ApiConfig, BotConfig, Config, RepoConfig
 from vibebot.core.bot import VibeBot
 from vibebot.core.events import Event
-from vibebot.modules.builtin.remindme import (
-    MAX_SECONDS,
-    RemindMeModule,
-    RemindMeSettings,
-    parse_duration,
+
+_REMINDME_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "optional-modules"
+    / "remindme"
+    / "__init__.py"
 )
+_spec = importlib.util.spec_from_file_location(
+    "vibebot_module._test.remindme", _REMINDME_PATH
+)
+assert _spec is not None and _spec.loader is not None
+_remindme_mod = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _remindme_mod
+_spec.loader.exec_module(_remindme_mod)
+
+MAX_SECONDS = _remindme_mod.MAX_SECONDS
+RemindMeModule = _remindme_mod.RemindMeModule
+RemindMeSettings = _remindme_mod.RemindMeSettings
+parse_duration = _remindme_mod.parse_duration
+
+TEST_REPO = "vibebot-optional"
 
 # ------------------------------- parser --------------------------------------
 
@@ -119,12 +136,12 @@ async def _install_module(
     bot: VibeBot, conn: _FakeConn, *, settings: RemindMeSettings | None = None
 ) -> RemindMeModule:
     module = RemindMeModule(bot)
-    module._repo = "__builtin__"
+    module._repo = TEST_REPO
     module._name = "remindme"
     module.settings = settings or RemindMeSettings()
     await module.on_load()
     bot.modules._register_triggers(
-        "__builtin__", "remindme", module, RemindMeModule
+        TEST_REPO, "remindme", module, RemindMeModule
     )
     bot.networks["mock"] = conn  # type: ignore[assignment]
     return module
@@ -148,7 +165,7 @@ async def test_command_schedules_reminder(bot: VibeBot) -> None:
     assert len(schedules) == 1
     dto = schedules[0]
     assert dto.owner_nick == "alice"
-    assert dto.repo_name == "__builtin__"
+    assert dto.repo_name == TEST_REPO
     assert dto.module_name == "remindme"
     assert dto.handler_name == "remind"
     assert dto.trigger["type"] == "date"
