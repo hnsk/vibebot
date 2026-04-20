@@ -83,6 +83,29 @@
   </div>
 </dialog>
 
+<dialog id="module-schedules-dialog" class="module-settings-dialog" aria-labelledby="module-schedules-title">
+  <div class="module-settings-shell">
+    <header class="module-settings-head">
+      <div>
+        <span class="module-settings-eyebrow">Module schedules</span>
+        <h2 id="module-schedules-title" class="module-settings-title">—</h2>
+        <p class="module-settings-sub" id="module-schedules-sub"></p>
+      </div>
+      <button type="button" class="module-settings-close" data-schedules-close aria-label="Close">✕</button>
+    </header>
+    <div class="module-settings-body" id="module-schedules-body">
+      <div class="muted">loading…</div>
+    </div>
+    <footer class="module-settings-foot">
+      <span class="module-settings-feedback" id="module-schedules-feedback" role="status"></span>
+      <div class="module-settings-foot-actions">
+        <button type="button" class="ghost-btn" data-schedules-close>Close</button>
+        <button type="button" class="module-settings-reload" id="module-schedules-refresh">Refresh</button>
+      </div>
+    </footer>
+  </div>
+</dialog>
+
 <section class="view view-repos" data-view="repos">
   <div class="panel">
     <h2 class="panel-title">Module repositories</h2>

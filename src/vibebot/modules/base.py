@@ -86,3 +86,16 @@ class Module:
     def scheduled_tasks(self) -> list[ScheduledTask]:
         """Return scheduled tasks this module wants APScheduler to run."""
         return []
+
+    def register_handler(
+        self,
+        name: str,
+        func: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Register a named handler that schedules may dispatch to.
+
+        Handlers take the schedule's stored `payload` dict. Call this from
+        `on_load`; the module loader unregisters all of a module's handlers
+        on unload.
+        """
+        self.bot.schedules.register_handler(self._repo, self._name, name, func)

@@ -2126,3 +2126,131 @@ dialog label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0
   .settings-global-bar { justify-content: flex-start; }
   .settings-save-feedback { text-align: left; }
 }
+
+/* ============================================================
+   Per-module scheduled-task panel (modules view)
+   ============================================================ */
+
+.module-sched-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-deep));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 999px;
+}
+#module-schedules-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.module-schedules-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.module-schedules-heading {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.module-schedules-hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-style: italic;
+}
+.module-schedules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.schedule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.45rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-size: 0.75rem;
+}
+.schedule-row .schedule-name {
+  font-weight: 600;
+  color: var(--fg-soft);
+}
+.schedule-row .schedule-trigger {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+}
+.schedule-row .schedule-next {
+  margin-left: auto;
+  color: var(--fg-soft);
+  font-size: 0.72rem;
+}
+.schedule-row .schedule-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.schedule-row .schedule-actions button {
+  font: inherit;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--fg-soft);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color var(--tx), border-color var(--tx);
+}
+.schedule-row .schedule-actions button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.status-pill {
+  display: inline-block;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 10%, var(--bg-deep));
+}
+.status-pill.is-scheduled {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, var(--bg-deep));
+}
+.status-pill.is-paused {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-deep));
+}
+.status-pill.is-completed {
+  color: var(--muted);
+}
+.status-pill.is-cancelled {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.status-pill.is-error,
+.status-pill.is-missed {
+  color: var(--err);
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, var(--bg-deep));
+}

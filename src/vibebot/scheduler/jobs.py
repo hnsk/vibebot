@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
+from apscheduler.jobstores.memory import MemoryJobStore  # type: ignore[import-untyped]
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore  # type: ignore[import-untyped]
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
 from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
@@ -34,8 +36,16 @@ class SchedulerService:
     def __init__(self, database_url: str) -> None:
         # APScheduler's SQLAlchemyJobStore uses sync SQLAlchemy; map our aiosqlite URL.
         sync_url = database_url.replace("sqlite+aiosqlite", "sqlite")
-        jobstore = SQLAlchemyJobStore(url=sync_url)
-        self._scheduler = AsyncIOScheduler(jobstores={"default": jobstore})
+        # `default` persists static module `scheduled_tasks` across restarts.
+        # `memory` is for user schedules whose authoritative store is the
+        # `schedules` SQL table — closures hold a live handler reference so
+        # they are not picklable, and don't need to be.
+        self._scheduler = AsyncIOScheduler(
+            jobstores={
+                "default": SQLAlchemyJobStore(url=sync_url),
+                "memory": MemoryJobStore(),
+            }
+        )
 
     async def start(self) -> None:
         self._scheduler.start()
@@ -49,12 +59,19 @@ class SchedulerService:
         *,
         trigger: dict[str, Any],
         job_id: str,
+        misfire_grace_time: int | None = None,
+        jobstore: str = "default",
     ) -> None:
+        kwargs: dict[str, Any] = {}
+        if misfire_grace_time is not None:
+            kwargs["misfire_grace_time"] = misfire_grace_time
         self._scheduler.add_job(
             func,
             trigger=_build_trigger(trigger),
             id=job_id,
             replace_existing=True,
+            jobstore=jobstore,
+            **kwargs,
         )
 
     def remove_job(self, job_id: str) -> None:
@@ -74,6 +91,18 @@ class SchedulerService:
             self._scheduler.resume_job(job_id)
         except Exception:
             log.debug("resume_job(%s) failed", job_id, exc_info=True)
+
+    def reschedule_job(self, job_id: str, trigger: dict[str, Any]) -> None:
+        self._scheduler.reschedule_job(job_id, trigger=_build_trigger(trigger))
+
+    def run_job_now(self, job_id: str) -> None:
+        self._scheduler.modify_job(job_id, next_run_time=datetime.now(UTC))
+
+    def get_job(self, job_id: str) -> Any:
+        return self._scheduler.get_job(job_id)
+
+    def add_listener(self, callback: Callable[[Any], None], mask: int) -> None:
+        self._scheduler.add_listener(callback, mask)
 
     def list_jobs(self) -> list[dict[str, Any]]:
         return [

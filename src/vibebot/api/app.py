@@ -18,6 +18,7 @@ from vibebot.api.routes import (
     modules,
     networks,
     repos,
+    schedules,
     send,
     settings,
 )
@@ -45,6 +46,7 @@ def build_app(bot: VibeBot) -> FastAPI:
     app.include_router(module_settings.router)
     app.include_router(repos.router)
     app.include_router(acl.router)
+    app.include_router(schedules.router)
     app.include_router(settings.router)
     app.include_router(ws.router)
 

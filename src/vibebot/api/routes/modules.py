@@ -18,10 +18,34 @@ class ModuleRef(BaseModel):
 @router.get("")
 async def list_modules(request: Request) -> list[dict]:
     bot = request.app.state.bot
-    return [
-        {"repo": m.repo, "name": m.name, "enabled": m.enabled, "description": m.instance.description}
-        for m in bot.modules.list_loaded()
-    ]
+    loaded = list(bot.modules.list_loaded())
+    # Bucket active user schedules per (repo, module) in one query.
+    active = await bot.schedules.list()
+    user_counts: dict[tuple[str, str], int] = {}
+    for dto in active:
+        if dto.status not in ("scheduled", "paused"):
+            continue
+        key = (dto.repo_name, dto.module_name)
+        user_counts[key] = user_counts.get(key, 0) + 1
+    handler_keys = set(bot.schedules._handlers.keys())  # noqa: SLF001
+    out: list[dict] = []
+    for m in loaded:
+        scheduled_task_count = len(m.job_ids)
+        user_schedule_count = user_counts.get((m.repo, m.name), 0)
+        handler_count = sum(1 for k in handler_keys if k[0] == m.repo and k[1] == m.name)
+        out.append(
+            {
+                "repo": m.repo,
+                "name": m.name,
+                "enabled": m.enabled,
+                "description": m.instance.description,
+                "scheduled_task_count": scheduled_task_count,
+                "user_schedule_count": user_schedule_count,
+                "handler_count": handler_count,
+                "implements_schedules": (scheduled_task_count + handler_count) > 0,
+            }
+        )
+    return out
 
 
 @router.post("/load")
@@ -69,3 +93,43 @@ async def disable(ref: ModuleRef, request: Request) -> dict:
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"status": "ok"}
+
+
+@router.get("/{repo}/{name}/schedules")
+async def module_schedules(repo: str, name: str, request: Request) -> dict:
+    """List scheduled work for a loaded module.
+
+    Returns two lists:
+      - ``module_tasks``: static tasks the module declares via
+        ``Module.scheduled_tasks()``; read-only surface (lifecycle is tied to
+        module load/unload — to stop them, disable the module).
+      - ``user_schedules``: user-created schedules targeting this module's
+        handlers; fully controllable via the ``/api/schedules`` endpoints.
+    """
+    bot = request.app.state.bot
+    loaded = next(
+        (m for m in bot.modules.list_loaded() if m.repo == repo and m.name == name),
+        None,
+    )
+    if loaded is None:
+        raise HTTPException(404, f"module {repo}/{name} not loaded")
+    module_tasks: list[dict] = []
+    for jid in loaded.job_ids:
+        job = bot.scheduler.get_job(jid)
+        if job is None:
+            continue
+        next_run = getattr(job, "next_run_time", None)
+        module_tasks.append(
+            {
+                "task_name": jid.rsplit("/", 1)[-1],
+                "job_id": jid,
+                "trigger": str(job.trigger),
+                "next_run_at": next_run.isoformat() if next_run else None,
+                "paused": next_run is None,
+            }
+        )
+    user_items = await bot.schedules.list(repo=repo, module=name)
+    return {
+        "module_tasks": module_tasks,
+        "user_schedules": [dto.to_dict() for dto in user_items],
+    }

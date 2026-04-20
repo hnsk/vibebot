@@ -779,14 +779,25 @@
   /* ---------------- admin panels (modules/repos/acl) ---------------- */
   const renderers = {
     module(m) {
+      const tasks = Number(m.scheduled_task_count) || 0;
+      const userScheds = Number(m.user_schedule_count) || 0;
+      const total = tasks + userScheds;
+      const implements_ = m.implements_schedules || tasks > 0 || userScheds > 0;
+      const badge = total > 0
+        ? `<span class="module-sched-badge" title="${tasks} task${tasks === 1 ? "" : "s"} · ${userScheds} user schedule${userScheds === 1 ? "" : "s"}">⏱ ${total}</span>`
+        : "";
+      const schedBtn = implements_
+        ? `<button data-action="open-schedules" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Schedules</button>`
+        : "";
       return `<div class="card" data-module-card data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">
-        <h3>${escapeHtml(m.repo)}/${escapeHtml(m.name)}</h3>
+        <h3>${escapeHtml(m.repo)}/${escapeHtml(m.name)}${badge}</h3>
         <div class="muted">${escapeHtml(m.description || "(no description)")} — ${m.enabled ? "enabled" : "disabled"}</div>
         <div class="actions">
           <button data-action="${m.enabled ? "disable" : "enable"}" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">${m.enabled ? "Disable" : "Enable"}</button>
           <button data-action="reload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Reload</button>
           <button data-action="unload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Unload</button>
           <button data-action="open-settings" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Settings</button>
+          ${schedBtn}
         </div>
       </div>`;
     },
@@ -810,6 +821,158 @@
       </div>`;
     },
   };
+
+  /* ---------- per-module schedules (lazy) ---------- */
+
+  function fetchModuleSchedules(repo, name) {
+    return api(`/api/modules/${encodeURIComponent(repo)}/${encodeURIComponent(name)}/schedules`);
+  }
+
+  function relTime(iso) {
+    if (!iso) return "—";
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return "—";
+    const diff = then - Date.now();
+    const abs = Math.abs(diff);
+    const sec = Math.round(abs / 1000);
+    const min = Math.round(sec / 60);
+    const hr = Math.round(min / 60);
+    const day = Math.round(hr / 24);
+    let txt;
+    if (sec < 60) txt = `${sec} s`;
+    else if (min < 60) txt = `${min} min`;
+    else if (hr < 48) txt = `${hr} h`;
+    else txt = `${day} d`;
+    return diff >= 0 ? `in ${txt}` : `${txt} ago`;
+  }
+
+  function triggerSummary(t) {
+    if (!t || typeof t !== "object") return "";
+    const type = t.type || "";
+    const bits = Object.entries(t)
+      .filter(([k]) => k !== "type")
+      .map(([k, v]) => `${k}=${v}`);
+    return `${type}${bits.length ? " " + bits.join(",") : ""}`;
+  }
+
+  function renderModuleScheduleBody(bodyEl, data) {
+    const tasks = Array.isArray(data.module_tasks) ? data.module_tasks : [];
+    const schedules = Array.isArray(data.user_schedules) ? data.user_schedules : [];
+    const tasksRows = tasks.map((t) => `
+      <li class="schedule-row">
+        <span class="schedule-name">${escapeHtml(t.task_name)}</span>
+        <span class="schedule-trigger" title="${escapeAttr(t.job_id)}">${escapeHtml(t.trigger || "")}</span>
+        <span class="schedule-next" title="${escapeAttr(t.next_run_at || "")}">${t.paused ? "paused" : escapeHtml(relTime(t.next_run_at))}</span>
+      </li>`).join("");
+    const schedRows = schedules.map((s) => {
+      const label = s.title || (s.id ? s.id.slice(0, 8) : "(unnamed)");
+      const status = s.status || "scheduled";
+      const actions = [];
+      if (status === "scheduled") {
+        actions.push(`<button data-action="schedule-pause" data-id="${escapeAttr(s.id)}">Pause</button>`);
+      } else if (status === "paused") {
+        actions.push(`<button data-action="schedule-resume" data-id="${escapeAttr(s.id)}">Resume</button>`);
+      }
+      if (status === "scheduled" || status === "paused") {
+        actions.push(`<button data-action="schedule-run-now" data-id="${escapeAttr(s.id)}">Run now</button>`);
+        actions.push(`<button data-action="schedule-cancel" data-id="${escapeAttr(s.id)}">Cancel</button>`);
+      }
+      return `
+      <li class="schedule-row">
+        <span class="schedule-name" title="${escapeAttr(s.id)}">${escapeHtml(label)}</span>
+        <span class="status-pill is-${escapeAttr(status)}">${escapeHtml(status)}</span>
+        <span class="schedule-trigger">${escapeHtml(triggerSummary(s.trigger))}</span>
+        <span class="schedule-next" title="${escapeAttr(s.next_run_at || "")}">${escapeHtml(relTime(s.next_run_at))}</span>
+        <span class="schedule-actions">${actions.join("")}</span>
+      </li>`;
+    }).join("");
+    bodyEl.innerHTML = `
+      <div class="module-schedules-group">
+        <div class="module-schedules-heading">Periodic tasks (${tasks.length})</div>
+        ${tasks.length
+          ? `<ul class="module-schedules-list">${tasksRows}</ul>
+             <div class="module-schedules-hint">Disable the module to stop these.</div>`
+          : `<div class="rail-empty">none</div>`}
+      </div>
+      <div class="module-schedules-group">
+        <div class="module-schedules-heading">Upcoming user schedules (${schedules.length})</div>
+        ${schedules.length
+          ? `<ul class="module-schedules-list">${schedRows}</ul>`
+          : `<div class="rail-empty">none</div>`}
+      </div>`;
+  }
+
+  /* ---------- per-module schedules dialog (modal overlay) ---------- */
+
+  const moduleSchedulesDialog = { repo: null, name: null };
+
+  function getSchedulesDialogEls() {
+    return {
+      dlg: document.getElementById("module-schedules-dialog"),
+      title: document.getElementById("module-schedules-title"),
+      sub: document.getElementById("module-schedules-sub"),
+      body: document.getElementById("module-schedules-body"),
+      feedback: document.getElementById("module-schedules-feedback"),
+      refresh: document.getElementById("module-schedules-refresh"),
+    };
+  }
+
+  async function openModuleSchedules(btn) {
+    const repo = btn.dataset.repo;
+    const name = btn.dataset.name;
+    const els = getSchedulesDialogEls();
+    if (!els.dlg) return;
+    moduleSchedulesDialog.repo = repo;
+    moduleSchedulesDialog.name = name;
+    els.title.textContent = `${repo}/${name}`;
+    els.sub.textContent = "loading…";
+    els.feedback.textContent = "";
+    els.feedback.classList.remove("is-err", "is-ok");
+    els.body.innerHTML = `<div class="module-settings-loading">fetching schedules…</div>`;
+    if (typeof els.dlg.showModal === "function" && !els.dlg.open) els.dlg.showModal();
+    await loadModuleSchedulesIntoDialog();
+  }
+
+  async function loadModuleSchedulesIntoDialog() {
+    const els = getSchedulesDialogEls();
+    const repo = moduleSchedulesDialog.repo;
+    const name = moduleSchedulesDialog.name;
+    if (!els.dlg || !repo || !name) return;
+    try {
+      const data = await fetchModuleSchedules(repo, name);
+      const tasks = Array.isArray(data.module_tasks) ? data.module_tasks.length : 0;
+      const scheds = Array.isArray(data.user_schedules) ? data.user_schedules.length : 0;
+      els.sub.textContent = `${tasks} declared task${tasks === 1 ? "" : "s"} · ${scheds} user schedule${scheds === 1 ? "" : "s"}`;
+      renderModuleScheduleBody(els.body, data);
+    } catch (err) {
+      els.sub.textContent = "";
+      els.body.innerHTML = `<div class="card-error">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function moduleRefForScheduleButton(btn) {
+    if (btn.closest("#module-schedules-dialog")) {
+      if (!moduleSchedulesDialog.repo) return null;
+      return { repo: moduleSchedulesDialog.repo, name: moduleSchedulesDialog.name, inDialog: true };
+    }
+    const card = btn.closest("[data-module-card]");
+    if (!card) return null;
+    return { repo: card.dataset.repo, name: card.dataset.name, inDialog: false };
+  }
+
+  function wireModuleSchedulesDialog() {
+    const els = getSchedulesDialogEls();
+    if (!els.dlg) return;
+    if (els.refresh) els.refresh.addEventListener("click", loadModuleSchedulesIntoDialog);
+    els.dlg.addEventListener("close", () => {
+      moduleSchedulesDialog.repo = null;
+      moduleSchedulesDialog.name = null;
+    });
+    els.dlg.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-schedules-close]")) { els.dlg.close(); return; }
+      if (ev.target === els.dlg) els.dlg.close();
+    });
+  }
 
   async function loadAdminPanel(el) {
     const tpl = renderers[el.dataset.template];
@@ -2426,6 +2589,34 @@
           await pullRepo(b);
           return;
         }
+        if (action === "open-schedules") {
+          await openModuleSchedules(b);
+          return;
+        }
+        if (action === "schedule-pause") {
+          await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/pause`, { method: "POST" });
+          if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          preserveScroll(refreshAdminPanels);
+          return;
+        }
+        if (action === "schedule-resume") {
+          await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/resume`, { method: "POST" });
+          if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          preserveScroll(refreshAdminPanels);
+          return;
+        }
+        if (action === "schedule-run-now") {
+          await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}/run-now`, { method: "POST" });
+          if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          return;
+        }
+        if (action === "schedule-cancel") {
+          if (!window.confirm("Cancel this schedule? It will be marked cancelled and stop firing.")) return;
+          await api(`/api/schedules/${encodeURIComponent(b.dataset.id)}`, { method: "DELETE" });
+          if (moduleRefForScheduleButton(b)) await loadModuleSchedulesIntoDialog();
+          preserveScroll(refreshAdminPanels);
+          return;
+        }
         if (action === "delete-repo") {
           await api("/api/repos/" + encodeURIComponent(b.dataset.name), { method: "DELETE" });
         } else if (action === "delete-acl") {
@@ -2594,6 +2785,7 @@
     wireUI();
     wireSettingsUI();
     wireModuleSettingsDialog();
+    wireModuleSchedulesDialog();
     updateAuthBadge();
     if (!state.token) {
       setStatus("Set an API token to populate panels.", "err");

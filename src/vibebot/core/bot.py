@@ -39,10 +39,12 @@ class VibeBot:
         from vibebot.modules.loader import ModuleManager
         from vibebot.modules.registry import RepoRegistry
         from vibebot.scheduler.jobs import SchedulerService
+        from vibebot.scheduler.service import ScheduleService
 
         self.repos = RepoRegistry(self.db, default_repos=config.repos, modules_dir=config.bot.modules_dir)
-        self.modules = ModuleManager(bot=self)
         self.scheduler = SchedulerService(database_url=self.db.url)
+        self.schedules = ScheduleService(self, self.scheduler, self.db, self.acl)
+        self.modules = ModuleManager(bot=self)
         self.settings = SettingsService(self, config_path)
 
         self._stop = asyncio.Event()
@@ -53,6 +55,7 @@ class VibeBot:
         await self.db.create_all()
         await self.repos.sync_from_config()
         await self.scheduler.start()
+        await self.schedules.rehydrate()
         await self._start_networks()
         await self.modules.reload_all()
         self._api_task = asyncio.create_task(self._run_api(), name="api")

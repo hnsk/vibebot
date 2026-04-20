@@ -80,3 +80,31 @@ class ModuleState(Base):
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Schedule(Base):
+    """A persisted schedule entry; the authoritative store for user/module schedules.
+
+    APScheduler is the firing engine but its jobstore is ephemeral for these
+    rows — the `ScheduleService` re-registers APScheduler jobs from this table
+    on startup, so closures and handler references do not need to be picklable.
+    """
+
+    __tablename__ = "schedules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_nick: Mapped[str] = mapped_column(String(64))
+    owner_mask: Mapped[str] = mapped_column(String(255))
+    owner_network: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    repo_name: Mapped[str] = mapped_column(String(128))
+    module_name: Mapped[str] = mapped_column(String(128))
+    handler_name: Mapped[str] = mapped_column(String(128))
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    trigger_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="scheduled")
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    misfire_grace_seconds: Mapped[int] = mapped_column(default=60)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -161,6 +161,7 @@ class ModuleManager:
             return
         for job_id in loaded.job_ids:
             self.bot.scheduler.remove_job(job_id)
+        self.bot.schedules.unregister_handlers_for(repo, name)
         try:
             await loaded.instance.on_unload()
         except Exception:
