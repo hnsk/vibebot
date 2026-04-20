@@ -778,6 +778,7 @@
   }
 
   /* ---------------- admin panels (modules/repos/acl) ---------------- */
+  let editingRepoName = null;
   const renderers = {
     module(m) {
       const tasks = Number(m.scheduled_task_count) || 0;
@@ -855,6 +856,28 @@
       </tr>${subRow}`;
     },
     repo(r) {
+      if (editingRepoName === r.name) {
+        const enabledAttr = r.enabled ? " checked" : "";
+        return `<div class="card repo-card is-editing">
+          <form class="repo-editor" data-edit-repo="${escapeAttr(r.name)}" autocomplete="off">
+            <header class="repo-editor-head">
+              <span class="repo-editor-eyebrow">Edit repo</span>
+              <h3 class="repo-editor-title">${escapeHtml(r.name)}</h3>
+            </header>
+            <div class="repo-editor-grid">
+              <label>URL<input name="url" value="${escapeAttr(r.url)}" required spellcheck="false"></label>
+              <label>Branch<input name="branch" value="${escapeAttr(r.branch)}" required spellcheck="false"></label>
+              <label>Subdir<input name="subdir" value="${escapeAttr(r.subdir || "")}" placeholder="(blank = repo root)" spellcheck="false"></label>
+            </div>
+            <label class="repo-editor-check"><input type="checkbox" name="enabled"${enabledAttr}> <span>Enabled</span></label>
+            <p class="repo-editor-error" hidden></p>
+            <footer class="repo-editor-actions">
+              <button type="button" class="repo-editor-btn is-ghost" data-action="cancel-edit-repo">Cancel</button>
+              <button type="submit" class="repo-editor-btn is-primary">Save</button>
+            </footer>
+          </form>
+        </div>`;
+      }
       const subdir = r.subdir ? `<div class="muted">subdir: <code>${escapeHtml(r.subdir)}</code></div>` : "";
       const deps = r.deps || {};
       let depsPill = "";
@@ -3164,19 +3187,16 @@
           return;
         }
         if (action === "edit-repo") {
-          const name = b.dataset.name;
-          const curSubdir = b.dataset.subdir || "";
-          const input = window.prompt(
-            `Subdir for ${name} (blank for repo root):`,
-            curSubdir,
-          );
-          if (input === null) return;
-          const trimmed = input.trim();
-          await api("/api/repos/" + encodeURIComponent(name), {
-            method: "PATCH",
-            body: trimmed ? { subdir: trimmed } : { clear_subdir: true },
-          });
-        } else if (action === "delete-repo") {
+          editingRepoName = b.dataset.name;
+          preserveScroll(refreshAdminPanels);
+          return;
+        }
+        if (action === "cancel-edit-repo") {
+          editingRepoName = null;
+          preserveScroll(refreshAdminPanels);
+          return;
+        }
+        if (action === "delete-repo") {
           await api("/api/repos/" + encodeURIComponent(b.dataset.name), { method: "DELETE" });
         } else if (action === "delete-acl") {
           await api("/api/acl/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
@@ -3192,6 +3212,32 @@
 
     // admin forms
     document.addEventListener("submit", async (ev) => {
+      if (ev.target.matches && ev.target.matches("form[data-edit-repo]")) {
+        ev.preventDefault();
+        const form = ev.target;
+        const name = form.dataset.editRepo;
+        const fd = new FormData(form);
+        const url = (fd.get("url") || "").toString().trim();
+        const branch = (fd.get("branch") || "").toString().trim();
+        const subdir = (fd.get("subdir") || "").toString().trim();
+        const enabled = form.querySelector("input[name='enabled']").checked;
+        const body = { url, branch, enabled };
+        if (subdir) body.subdir = subdir;
+        else body.clear_subdir = true;
+        const errEl = form.querySelector(".repo-editor-error");
+        const saveBtn = form.querySelector("button[type='submit']");
+        if (errEl) { errEl.textContent = ""; errEl.hidden = true; }
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+        try {
+          await api("/api/repos/" + encodeURIComponent(name), { method: "PATCH", body });
+          editingRepoName = null;
+          preserveScroll(refreshAdminPanels);
+        } catch (err) {
+          if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
+        }
+        return;
+      }
       if (ev.target.id === "repo-form") {
         ev.preventDefault();
         const fd = new FormData(ev.target);

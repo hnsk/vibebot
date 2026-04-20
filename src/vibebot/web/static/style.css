@@ -1167,6 +1167,122 @@ body {
   overflow: auto;
 }
 .dialog-error[hidden] { display: none; }
+
+.card.is-editing {
+  grid-column: 1 / -1;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+.repo-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem 0.95rem;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  box-shadow: 0 6px 22px -14px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+.repo-editor-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.repo-editor-eyebrow {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+.repo-editor h3.repo-editor-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+  word-break: break-all;
+}
+.repo-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.6rem 0.75rem;
+}
+.repo-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.repo-editor input[type="text"],
+.repo-editor input:not([type]),
+.repo-editor input[type="url"] {
+  font: inherit;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  padding: 0.42rem 0.55rem;
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color var(--tx);
+}
+.repo-editor input:focus { border-color: var(--accent); }
+.repo-editor-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+  font-size: 0.7rem;
+  color: var(--fg-soft);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.repo-editor-check input { accent-color: var(--accent); }
+.repo-editor-error {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--err);
+  border: 1px solid var(--err);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--err) 12%, var(--bg-deep));
+}
+.repo-editor-error[hidden] { display: none; }
+.repo-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+}
+.repo-editor-btn {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--tx), border-color var(--tx), background var(--tx);
+}
+.repo-editor-btn.is-ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg-soft);
+}
+.repo-editor-btn.is-ghost:hover { color: var(--accent); border-color: var(--accent); }
+.repo-editor-btn.is-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+}
+.repo-editor-btn.is-primary:hover {
+  background: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--fg));
+}
+.repo-editor-btn:disabled { opacity: 0.6; cursor: progress; }
 .acl-nick { color: var(--accent); font-weight: 700; }
 .acl-net  { color: var(--accent-2); }
 
