@@ -1575,10 +1575,21 @@
         }
         break;
       }
-      case "connect":
+      case "connect": {
+        const meta = state.networks.find((x) => x.name === net);
+        if (meta) meta.connected = true;
         pushLine(net, "*", { kind: "system", body: `connected to ${net}` });
         loadNetworks();
         break;
+      }
+      case "disconnect": {
+        const meta = state.networks.find((x) => x.name === net);
+        if (meta) meta.connected = false;
+        state.joined[net] = {};
+        pushLine(net, "*", { kind: "system", body: `disconnected from ${net}${p.expected ? "" : " (unexpected)"}` });
+        renderTree();
+        break;
+      }
       case "host_hidden":
         pushLine(net, "*", { kind: "system", body: `host hidden on ${net}` });
         break;
@@ -2350,7 +2361,13 @@
     let sock;
     try { sock = new WebSocket(url); } catch { wsState("offline"); return; }
     state.ws = sock;
-    sock.onopen = () => wsState("online");
+    sock.onopen = () => {
+      wsState("online");
+      // Resync after reconnect: events missed while the socket was down would
+      // otherwise leave topology stale (no periodic poll to backstop it).
+      if (state.wsEverConnected) loadNetworks();
+      state.wsEverConnected = true;
+    };
     sock.onmessage = (m) => {
       let payload = null;
       try { payload = JSON.parse(m.data); } catch { return; }
@@ -2898,7 +2915,5 @@
       reconnectEvents();
       refreshAdminPanels();
     }
-    // periodic refresh of network/channel topology
-    setInterval(() => { if (state.token) loadNetworks(); }, 10000);
   });
 })();

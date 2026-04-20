@@ -368,6 +368,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     async def on_disconnect(self, expected: bool) -> None:  # type: ignore[override]
         await super().on_disconnect(expected)
         self._vb_disconnected.set()
+        await self._publish("disconnect", expected=expected)
 
 
 class NetworkConnection:
