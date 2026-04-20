@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_URL_RE = re.compile(r"https?://[^\s<>\"'`]+")
+_URL_RE = re.compile(r"(?:https?://|\bwww\.)[^\s<>\"'`]+")
 _TRAILING_PUNCT = ".,!?);:]>"
 _WS_RE = re.compile(r"\s+")
 _META_CHARSET_RE = re.compile(
@@ -108,7 +108,7 @@ class UrlTitleModule(Module):
         self.register_trigger(
             "message",
             handler=self.handle_message,
-            regex=r"https?://\S+",
+            regex=r"(?:https?://|\bwww\.)\S+",
         )
 
     async def on_unload(self) -> None:
@@ -118,8 +118,8 @@ class UrlTitleModule(Module):
 
     async def handle_message(self, event: Event) -> None:
         message: str = event.get("message", "") or ""
-        url = _extract_url(message)
-        if not url:
+        urls = _extract_urls(message)
+        if not urls:
             return
 
         source: str = event.get("source", "") or ""
@@ -131,6 +131,15 @@ class UrlTitleModule(Module):
             return
         reply_to = target if target.startswith("#") else source
 
+        for url in urls:
+            await self._process_url(conn, reply_to, url)
+
+    async def _process_url(
+        self,
+        conn: NetworkConnection,
+        reply_to: str,
+        url: str,
+    ) -> None:
         host = _hostname(url)
         if host and _host_matches(host, self.settings.ignore_hosts):
             return
@@ -223,16 +232,22 @@ class UrlTitleModule(Module):
             return None
 
 
-def _extract_url(message: str) -> str | None:
-    match = _URL_RE.search(message)
-    if not match:
-        return None
-    url = match.group(0)
-    while url and url[-1] in _TRAILING_PUNCT:
-        url = url[:-1]
-    if not url.startswith(("http://", "https://")):
-        return None
-    return url
+def _extract_urls(message: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _URL_RE.finditer(message):
+        url = match.group(0)
+        while url and url[-1] in _TRAILING_PUNCT:
+            url = url[:-1]
+        if url.startswith("www."):
+            url = "https://" + url
+        if not url.startswith(("http://", "https://")):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out
 
 
 def _hostname(url: str) -> str | None:
