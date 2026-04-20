@@ -33,6 +33,13 @@ log = logging.getLogger(__name__)
 class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
     """pydle client with protocol toggle, inline auth dispatch, and EventBus bridge."""
 
+    # Disable pydle's internal auto-reconnect. NetworkConnection._run owns the
+    # reconnect loop (fail-over chain + backoff); pydle's reconnect would race
+    # it and, on DNS failure inside handle_forever's disconnect path, raise an
+    # unhandled gaierror that kills the read task before our disconnect event
+    # fires, wedging _run on _vb_disconnected.wait() forever.
+    RECONNECT_ON_ERROR = False
+
     def __init__(
         self,
         *args: Any,
@@ -54,6 +61,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         self._vb_sasl_failed = False
         self._vb_host_hidden = asyncio.Event()
         self._vb_disconnected = asyncio.Event()
+        self._vb_expected_disconnect = False
 
     async def _publish(self, kind: str, **payload: Any) -> None:
         await self._bus.publish(Event(kind=kind, network=self._network_name, payload=payload))
@@ -368,9 +376,19 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
             self._mode_limit = None
 
     async def on_disconnect(self, expected: bool) -> None:  # type: ignore[override]
-        await super().on_disconnect(expected)
+        # Signal + publish FIRST so _run's wait always wakes, even if super
+        # raises. With RECONNECT_ON_ERROR=False, super just logs and returns,
+        # but we guard anyway — losing the disconnect signal wedges _run.
+        self._vb_expected_disconnect = bool(expected)
         self._vb_disconnected.set()
-        await self._publish("disconnect", expected=expected)
+        try:
+            await self._publish("disconnect", expected=expected)
+        except Exception:
+            log.exception("%s: disconnect publish failed", self._network_name)
+        try:
+            await super().on_disconnect(expected)
+        except Exception:
+            log.exception("%s: pydle on_disconnect raised", self._network_name)
 
 
 async def _resolve_bind_address(
@@ -539,11 +557,26 @@ class NetworkConnection:
                                     self.config.name, self.config.hostname,
                                 )
                         await self._client.connect(**connect_kwargs)
+                        # Successful dial → reset fail-over backoff so a later
+                        # unexpected drop doesn't start at the previous ceiling.
+                        backoff = self.BACKOFF_START
                         await self._client._vb_disconnected.wait()
-                        clean_exit = True
-                        break  # intentional disconnect — stop fail-over chain
+                        if self._client._vb_expected_disconnect:
+                            clean_exit = True
+                            break  # stop() or intentional disconnect
+                        # Unexpected drop → fall through to try next server,
+                        # then outer while loop re-dials the chain after backoff.
+                        log.warning(
+                            "%s: unexpected disconnect from %s:%s; will try next server",
+                            self.config.name, server.host, server.port,
+                        )
                     except asyncio.CancelledError:
                         raise
+                    except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                        log.warning(
+                            "%s: server %s:%s failed (%s), trying next",
+                            self.config.name, server.host, server.port, exc,
+                        )
                     except Exception:
                         log.warning(
                             "%s: server %s:%s failed, trying next",
