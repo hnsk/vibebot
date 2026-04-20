@@ -855,11 +855,14 @@
       </tr>${subRow}`;
     },
     repo(r) {
+      const subdir = r.subdir ? `<div class="muted">subdir: <code>${escapeHtml(r.subdir)}</code></div>` : "";
       return `<div class="card">
         <h3>${escapeHtml(r.name)}</h3>
         <div class="muted">${escapeHtml(r.url)} @ ${escapeHtml(r.branch)}${r.enabled ? "" : " (disabled)"}</div>
+        ${subdir}
         <div class="actions">
           <button data-action="pull-repo" data-name="${escapeAttr(r.name)}">Pull</button>
+          <button data-action="edit-repo" data-name="${escapeAttr(r.name)}" data-url="${escapeAttr(r.url)}" data-branch="${escapeAttr(r.branch)}" data-subdir="${escapeAttr(r.subdir || "")}">Edit</button>
           <button data-action="delete-repo" data-name="${escapeAttr(r.name)}">Delete</button>
         </div>
       </div>`;
@@ -3083,7 +3086,20 @@
           await refreshSchedulesPageIfOpen();
           return;
         }
-        if (action === "delete-repo") {
+        if (action === "edit-repo") {
+          const name = b.dataset.name;
+          const curSubdir = b.dataset.subdir || "";
+          const input = window.prompt(
+            `Subdir for ${name} (blank for repo root):`,
+            curSubdir,
+          );
+          if (input === null) return;
+          const trimmed = input.trim();
+          await api("/api/repos/" + encodeURIComponent(name), {
+            method: "PATCH",
+            body: trimmed ? { subdir: trimmed } : { clear_subdir: true },
+          });
+        } else if (action === "delete-repo") {
           await api("/api/repos/" + encodeURIComponent(b.dataset.name), { method: "DELETE" });
         } else if (action === "delete-acl") {
           await api("/api/acl/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
@@ -3102,10 +3118,17 @@
       if (ev.target.id === "repo-form") {
         ev.preventDefault();
         const fd = new FormData(ev.target);
+        const subdir = (fd.get("subdir") || "").toString().trim();
         try {
           await api("/api/repos", {
             method: "POST",
-            body: { name: fd.get("name"), url: fd.get("url"), branch: fd.get("branch") || "main", enabled: true },
+            body: {
+              name: fd.get("name"),
+              url: fd.get("url"),
+              branch: fd.get("branch") || "main",
+              subdir: subdir || null,
+              enabled: true,
+            },
           });
           ev.target.reset();
           refreshAdminPanels();

@@ -14,7 +14,16 @@ class RepoBody(BaseModel):
     name: str
     url: str
     branch: str = "main"
+    subdir: str | None = None
     enabled: bool = True
+
+
+class RepoPatch(BaseModel):
+    url: str | None = None
+    branch: str | None = None
+    subdir: str | None = None
+    enabled: bool | None = None
+    clear_subdir: bool = False
 
 
 @router.get("")
@@ -26,6 +35,7 @@ async def list_repos(request: Request) -> list[dict]:
             "name": r.name,
             "url": r.url,
             "branch": r.branch,
+            "subdir": r.subdir,
             "enabled": r.enabled,
             "last_pulled_at": r.last_pulled_at.isoformat() if r.last_pulled_at else None,
         }
@@ -37,9 +47,32 @@ async def list_repos(request: Request) -> list[dict]:
 async def add_repo(body: RepoBody, request: Request) -> dict:
     bot = request.app.state.bot
     try:
-        await bot.repos.add_repo(body.name, body.url, body.branch, body.enabled)
+        await bot.repos.add_repo(
+            body.name, body.url, body.branch, body.enabled, subdir=body.subdir
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+    return {"status": "ok"}
+
+
+@router.patch("/{name}")
+async def patch_repo(name: str, body: RepoPatch, request: Request) -> dict:
+    bot = request.app.state.bot
+    try:
+        repo = await bot.repos.update_repo(
+            name,
+            url=body.url,
+            branch=body.branch,
+            subdir=body.subdir,
+            enabled=body.enabled,
+            clear_subdir=body.clear_subdir,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if repo is None:
+        raise HTTPException(404, f"Unknown repo {name!r}")
     return {"status": "ok"}
 
 

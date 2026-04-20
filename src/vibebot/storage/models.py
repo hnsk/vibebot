@@ -65,6 +65,7 @@ class Repo(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True)
     url: Mapped[str] = mapped_column(Text)
     branch: Mapped[str] = mapped_column(String(128), default="main")
+    subdir: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

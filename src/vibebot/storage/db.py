@@ -19,6 +19,7 @@ from vibebot.storage.models import Base
 # create_all() adds new tables but never alters existing ones.
 _ADD_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("module_state", "last_error", "TEXT"),
+    ("repos", "subdir", "VARCHAR(255)"),
 )
 
 

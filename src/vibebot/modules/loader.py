@@ -92,8 +92,11 @@ class ModuleManager:
         if repo == BUILTIN_REPO:
             qualified = f"{BUILTIN_PACKAGE}.{name}"
             return await self._load_python_path(repo, name, qualified)
-        path = await self.bot.repos.clone_or_pull(repo)
-        module_dir = path / name
+        await self.bot.repos.clone_or_pull(repo)
+        repo_row = await self.bot.repos.get_repo(repo)
+        if repo_row is None:
+            raise FileNotFoundError(f"Unknown repo {repo!r}")
+        module_dir = self.bot.repos.module_root_for(repo_row) / name
         if not module_dir.exists():
             raise FileNotFoundError(f"No module {name!r} in repo {repo!r} at {module_dir}")
         qualified = f"vibebot_module.{repo}.{name}"
@@ -293,26 +296,28 @@ class ModuleManager:
                 out.append({"repo": BUILTIN_REPO, "name": module_name,
                             "description": desc, "error_message": err})
 
-        # repo modules on disk
-        root = self.bot.repos.root
-        if root.exists():
-            for repo_dir in sorted(root.iterdir()):
-                if not repo_dir.is_dir() or repo_dir.name.startswith("."):
+        # repo modules on disk — iterate DB repos so each repo's subdir is honored
+        for repo_row in await self.bot.repos.list_repos():
+            try:
+                module_root = self.bot.repos.module_root_for(repo_row)
+            except ValueError:
+                continue
+            if not module_root.is_dir():
+                continue
+            for mod_dir in sorted(module_root.iterdir()):
+                if not mod_dir.is_dir() or mod_dir.name.startswith("."):
                     continue
-                for mod_dir in sorted(repo_dir.iterdir()):
-                    if not mod_dir.is_dir() or mod_dir.name.startswith("."):
-                        continue
-                    entry_file = mod_dir / "__init__.py"
-                    if not entry_file.exists():
-                        continue
-                    key = (repo_dir.name, mod_dir.name)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    qualified = f"vibebot_module.{repo_dir.name}.{mod_dir.name}"
-                    desc, err = _probe_module_meta(qualified, entry_file)
-                    out.append({"repo": repo_dir.name, "name": mod_dir.name,
-                                "description": desc, "error_message": err})
+                entry_file = mod_dir / "__init__.py"
+                if not entry_file.exists():
+                    continue
+                key = (repo_row.name, mod_dir.name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                qualified = f"vibebot_module.{repo_row.name}.{mod_dir.name}"
+                desc, err = _probe_module_meta(qualified, entry_file)
+                out.append({"repo": repo_row.name, "name": mod_dir.name,
+                            "description": desc, "error_message": err})
 
         # DB rows for unloaded modules — pick up prior last_error, include rows
         # whose source may no longer exist on disk (so the operator can see them).

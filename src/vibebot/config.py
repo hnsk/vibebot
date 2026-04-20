@@ -143,6 +143,7 @@ class RepoConfig(BaseModel):
     name: str
     url: str
     branch: str = "main"
+    subdir: str | None = None
     enabled: bool = True
 
 
