@@ -12,18 +12,21 @@ router = APIRouter(prefix="/api/networks", tags=["networks"], dependencies=[Depe
 @router.get("")
 async def list_networks(request: Request) -> list[dict]:
     bot = request.app.state.bot
-    return [
-        {
-            "name": conn.name,
-            "host": conn.config.host,
-            "port": conn.config.port,
-            "tls": conn.config.tls,
-            "connected": conn.connected,
-            "channels": list(conn.config.channels),
-            "nickname": getattr(conn.client, "nickname", None) or conn.config.nick,
-        }
-        for conn in bot.networks.values()
-    ]
+    out = []
+    for conn in bot.networks.values():
+        server = conn.config.default_server
+        out.append(
+            {
+                "name": conn.name,
+                "host": server.host if server else None,
+                "port": server.port if server else None,
+                "tls": server.tls if server else None,
+                "connected": conn.connected,
+                "channels": list(conn.config.channels),
+                "nickname": getattr(conn.client, "nickname", None) or conn.config.nick,
+            }
+        )
+    return out
 
 
 @router.post("/{name}/join")

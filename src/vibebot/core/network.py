@@ -18,6 +18,7 @@ from vibebot.config import (
     NoAuthConfig,
     QAuthConfig,
     SaslAuthConfig,
+    ServerConfig,
 )
 from vibebot.core.events import Event, EventBus
 from vibebot.core.roster import ChannelRoster
@@ -127,7 +128,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
             if auth.wait_before_join:
                 try:
                     await asyncio.wait_for(self._vb_host_hidden.wait(), timeout=auth.wait_timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     log.warning(
                         "%s: Q +x confirmation (396) timed out after %.1fs; joining anyway",
                         self._network_name,
@@ -320,11 +321,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         if mask:
             await self._publish("roster", channel=mask, reason="who")
 
-    async def on_unknown(self, message: Any) -> None:  # type: ignore[override]
-        # pydle logs unhandled server replies (numerics like 461/421/401, plus
-        # non-numeric server commands) and drops them. Bridge them onto the bus
-        # so /raw output and server error replies surface in the UI.
-        await super().on_unknown(message)
+    async def _publish_numeric(self, message: Any) -> None:
         try:
             params = [p for p in (message.params or ()) if p is not None]
         except Exception:
@@ -335,6 +332,25 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
             command=str(getattr(message, "command", "") or ""),
             params=params,
         )
+
+    async def on_raw_221(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_UMODEIS — user mode echo (e.g. after MODE nick +i on connect).
+        await self._publish_numeric(message)
+
+    async def on_raw_338(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_WHOISACTUALLY — WHOIS actual host/IP line.
+        await self._publish_numeric(message)
+
+    async def on_raw_379(self, message: Any) -> None:  # type: ignore[override]
+        # RPL_WHOISMODES — WHOIS user-modes line.
+        await self._publish_numeric(message)
+
+    async def on_unknown(self, message: Any) -> None:  # type: ignore[override]
+        # pydle logs unhandled server replies (numerics like 461/421/401, plus
+        # non-numeric server commands) and drops them. Bridge them onto the bus
+        # so /raw output and server error replies surface in the UI.
+        await super().on_unknown(message)
+        await self._publish_numeric(message)
 
     async def on_isupport_modes(self, value: Any) -> None:  # type: ignore[override]
         # Ergo (and some other servers) advertise MODES with no value,
@@ -353,7 +369,16 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
 
 
 class NetworkConnection:
-    """Owns one IRC network connection and its background task."""
+    """Owns one IRC network connection.
+
+    Invariant: at most one underlying pydle `_Client` exists at any time.
+    Multi-server fail-over is strictly sequential inside `_run()` — each
+    attempt builds a fresh client, connects, awaits disconnect, clears the
+    reference, then the loop advances. Never parallel dials.
+    """
+
+    BACKOFF_START = 5.0
+    BACKOFF_MAX = 300.0
 
     def __init__(
         self,
@@ -366,33 +391,8 @@ class NetworkConnection:
         self._bus = bus
         self._roster = roster
         self._task: asyncio.Task[None] | None = None
-
-        client_kwargs: dict[str, Any] = {
-            "nickname": config.nick,
-            "username": config.username or config.nick,
-            "realname": config.realname or config.nick,
-            "network_name": config.name,
-            "bus": bus,
-            "autojoin": list(config.channels),
-            "protocol": config.protocol,
-            "auth": config.auth,
-            "roster": roster,
-        }
-
-        auth = config.auth
-        if isinstance(auth, SaslAuthConfig):
-            if config.protocol == "rfc1459":
-                log.warning(
-                    "%s: SASL auth requested but protocol=rfc1459 disables CAP; SASL will not run",
-                    config.name,
-                )
-            client_kwargs["sasl_username"] = auth.username
-            client_kwargs["sasl_password"] = auth.password
-            client_kwargs["sasl_mechanism"] = auth.mechanism
-            if auth.mechanism == "EXTERNAL" and auth.cert_path:
-                client_kwargs["tls_client_cert"] = auth.cert_path
-
-        self._client = _Client(**client_kwargs)
+        self._client: _Client | None = None
+        self._current_server: ServerConfig | None = None
 
     @property
     def name(self) -> str:
@@ -400,46 +400,176 @@ class NetworkConnection:
 
     @property
     def connected(self) -> bool:
-        return bool(self._client.connected)
+        return bool(self._client and self._client.connected)
 
     @property
-    def client(self) -> _Client:
+    def client(self) -> _Client | None:
         return self._client
 
+    def current_server(self) -> ServerConfig | None:
+        return self._current_server
+
+    def _ordered_servers(self) -> list[ServerConfig]:
+        """Default first, then remaining servers in declaration order."""
+        default = next((s for s in self.config.servers if s.is_default), None)
+        rest = [s for s in self.config.servers if s is not default]
+        return [default, *rest] if default is not None else list(self.config.servers)
+
+    def _build_client(self) -> _Client:
+        cfg = self.config
+        kwargs: dict[str, Any] = {
+            "nickname": cfg.nick,
+            "username": cfg.username or cfg.nick,
+            "realname": cfg.realname or cfg.nick,
+            "network_name": cfg.name,
+            "bus": self._bus,
+            "autojoin": list(cfg.channels),
+            "protocol": cfg.protocol,
+            "auth": cfg.auth,
+            "roster": self._roster,
+        }
+        auth = cfg.auth
+        if isinstance(auth, SaslAuthConfig):
+            if cfg.protocol == "rfc1459":
+                log.warning(
+                    "%s: SASL auth requested but protocol=rfc1459 disables CAP; SASL will not run",
+                    cfg.name,
+                )
+            kwargs["sasl_username"] = auth.username
+            kwargs["sasl_password"] = auth.password
+            kwargs["sasl_mechanism"] = auth.mechanism
+            if auth.mechanism == "EXTERNAL" and auth.cert_path:
+                kwargs["tls_client_cert"] = auth.cert_path
+        if cfg.hostname:
+            log.debug(
+                "%s: hostname=%r stored; pydle USER command does not expose it (server sets vhost)",
+                cfg.name, cfg.hostname,
+            )
+        return _Client(**kwargs)
+
     async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
         self._task = asyncio.create_task(self._run(), name=f"network:{self.config.name}")
 
     async def _run(self) -> None:
+        backoff = self.BACKOFF_START
         try:
-            await self._client.connect(
-                hostname=self.config.host,
-                port=self.config.port,
-                tls=self.config.tls,
-                tls_verify=self.config.tls_verify,
-            )
-            # pydle.connect() already spawns handle_forever() as a background
-            # task; awaiting it again here creates a second reader on the same
-            # StreamReader and raises "readuntil() called while another
-            # coroutine is already waiting for incoming data".
-            await self._client._vb_disconnected.wait()
+            while True:
+                servers = self._ordered_servers()
+                if not servers:
+                    log.warning("%s: no servers configured; connection idle", self.config.name)
+                    return
+                clean_exit = False
+                for server in servers:
+                    self._current_server = server
+                    self._client = self._build_client()
+                    try:
+                        log.info(
+                            "%s: dialling %s:%s (tls=%s, default=%s)",
+                            self.config.name, server.host, server.port, server.tls, server.is_default,
+                        )
+                        await self._client.connect(
+                            hostname=server.host,
+                            port=server.port,
+                            tls=server.tls,
+                            tls_verify=server.tls_verify,
+                        )
+                        await self._client._vb_disconnected.wait()
+                        clean_exit = True
+                        break  # intentional disconnect — stop fail-over chain
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.warning(
+                            "%s: server %s:%s failed, trying next",
+                            self.config.name, server.host, server.port,
+                            exc_info=True,
+                        )
+                    finally:
+                        if self._client is not None:
+                            with contextlib.suppress(Exception):
+                                if self._client.connected:
+                                    await self._client.disconnect(expected=True)
+                        self._client = None
+                        self._current_server = None
+
+                if clean_exit:
+                    return  # stop() or intentional disconnect
+
+                log.warning(
+                    "%s: all servers failed; backing off %.1fs",
+                    self.config.name, backoff,
+                )
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
+                backoff = min(backoff * 2.0, self.BACKOFF_MAX)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Network %s connection failed", self.config.name)
+            log.exception("Network %s run loop crashed", self.config.name)
 
     async def stop(self) -> None:
-        if self._client.connected:
-            try:
-                await self._client.disconnect(expected=True)
-            except Exception:
-                log.exception("Error disconnecting from %s", self.config.name)
+        client = self._client
+        if client is not None and client.connected:
+            with contextlib.suppress(Exception):
+                await client.disconnect(expected=True)
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
+        self._client = None
+        self._current_server = None
+
+    async def reconnect(self) -> None:
+        """Tear down and respawn — safe because stop() awaits full teardown first."""
+        await self.stop()
+        await self.start()
+
+    async def apply_identity(
+        self,
+        *,
+        nick: str | None = None,
+        username: str | None = None,
+        realname: str | None = None,
+        hostname: str | None = None,
+    ) -> None:
+        """Live-apply identity changes. nick fires NICK immediately; ident/realname
+        require reconnect (noted in return flag; caller decides)."""
+        if nick is not None and nick != self.config.nick:
+            self.config.nick = nick
+            if self._client is not None and self._client.connected:
+                with contextlib.suppress(Exception):
+                    await self._client.set_nickname(nick)
+        if username is not None:
+            self.config.username = username
+        if realname is not None:
+            self.config.realname = realname
+        if hostname is not None:
+            self.config.hostname = hostname or None
+
+    async def apply_channels(self, desired: list[str]) -> None:
+        """Diff active channels vs desired, PART extras, JOIN missing. Updates config."""
+        desired_set = [c for c in desired if c]
+        self.config.channels = list(desired_set)
+        client = self._client
+        if client is None or not client.connected:
+            return
+        current = set(client.channels.keys()) if hasattr(client, "channels") else set()
+        target = set(desired_set)
+        for ch in current - target:
+            with contextlib.suppress(Exception):
+                await client.part(ch)
+        for ch in target - current:
+            with contextlib.suppress(Exception):
+                await client.join(ch)
 
     async def send_message(self, target: str, message: str) -> None:
+        if self._client is None:
+            raise RuntimeError(f"{self.config.name}: not connected")
         if message.startswith("\x01ACTION ") and message.endswith("\x01"):
             body = message[len("\x01ACTION "):-1]
             await self._client.ctcp(target, "ACTION", body)
@@ -447,18 +577,30 @@ class NetworkConnection:
         await self._client.message(target, message)
 
     async def send_raw(self, command: str, *params: str) -> None:
+        if self._client is None:
+            raise RuntimeError(f"{self.config.name}: not connected")
         await self._client.rawmsg(command, *params)
 
     async def join(self, channel: str) -> None:
+        if self._client is None:
+            raise RuntimeError(f"{self.config.name}: not connected")
         await self._client.join(channel)
+        if channel not in self.config.channels:
+            self.config.channels.append(channel)
 
     async def part(self, channel: str, reason: str | None = None) -> None:
+        if self._client is None:
+            raise RuntimeError(f"{self.config.name}: not connected")
         await self._client.part(channel, reason)
+        if channel in self.config.channels:
+            self.config.channels.remove(channel)
 
     def channel_users(self, channel: str) -> list[str]:
         if self._roster is not None:
             return sorted((u.nick for u in self._roster.users(self.config.name, channel)),
                           key=str.lower)
+        if self._client is None:
+            return []
         info = self._client.channels.get(channel)
         if not info:
             return []

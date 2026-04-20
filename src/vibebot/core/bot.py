@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from vibebot.config import Config
@@ -14,6 +15,7 @@ from vibebot.core.events import EventBus
 from vibebot.core.history import ChannelHistory
 from vibebot.core.network import NetworkConnection
 from vibebot.core.roster import ChannelRoster
+from vibebot.core.settings import SettingsService
 from vibebot.storage.db import Database
 
 log = logging.getLogger(__name__)
@@ -22,8 +24,9 @@ log = logging.getLogger(__name__)
 class VibeBot:
     """Top-level runtime. Owns DB, event bus, network connections, modules, API, scheduler."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, *, config_path: Path | None = None) -> None:
         self.config = config
+        self.config_path = config_path
         self.bus = EventBus()
         self.db = Database(config.bot.database)
         self.acl = AclService(self.db)
@@ -40,6 +43,7 @@ class VibeBot:
         self.repos = RepoRegistry(self.db, default_repos=config.repos, modules_dir=config.bot.modules_dir)
         self.modules = ModuleManager(bot=self)
         self.scheduler = SchedulerService(database_url=self.db.url)
+        self.settings = SettingsService(self, config_path)
 
         self._stop = asyncio.Event()
         self._api_task: asyncio.Task[None] | None = None
@@ -87,7 +91,7 @@ class VibeBot:
         server = uvicorn.Server(cfg)
         # VibeBot owns signal handling; otherwise uvicorn cancels its own
         # lifespan task on SIGINT and starlette logs a CancelledError trace.
-        setattr(server, "install_signal_handlers", lambda: None)
+        server.install_signal_handlers = lambda: None
         self._api_server = server
         await server.serve()
 

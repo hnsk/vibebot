@@ -68,43 +68,43 @@ async def send(network: str, body: SendBody, request: Request) -> dict:
 
 @router.post("/op")
 async def op(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.set_mode(body.channel, "+o", body.nick)
+    await _client(request, network).set_mode(body.channel, "+o", body.nick)
     return {"status": "ok"}
 
 
 @router.post("/deop")
 async def deop(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.set_mode(body.channel, "-o", body.nick)
+    await _client(request, network).set_mode(body.channel, "-o", body.nick)
     return {"status": "ok"}
 
 
 @router.post("/voice")
 async def voice(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.set_mode(body.channel, "+v", body.nick)
+    await _client(request, network).set_mode(body.channel, "+v", body.nick)
     return {"status": "ok"}
 
 
 @router.post("/devoice")
 async def devoice(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.set_mode(body.channel, "-v", body.nick)
+    await _client(request, network).set_mode(body.channel, "-v", body.nick)
     return {"status": "ok"}
 
 
 @router.post("/kick")
 async def kick(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.kick(body.channel, body.nick, body.reason or "")
+    await _client(request, network).kick(body.channel, body.nick, body.reason or "")
     return {"status": "ok"}
 
 
 @router.post("/ban")
 async def ban(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.ban(body.channel, body.nick)
+    await _client(request, network).ban(body.channel, body.nick)
     return {"status": "ok"}
 
 
 @router.post("/kickban")
 async def kickban(network: str, body: ChannelNickBody, request: Request) -> dict:
-    await _conn(request, network).client.kickban(body.channel, body.nick, body.reason or "")
+    await _client(request, network).kickban(body.channel, body.nick, body.reason or "")
     return {"status": "ok"}
 
 
@@ -112,13 +112,13 @@ async def kickban(network: str, body: ChannelNickBody, request: Request) -> dict
 async def mode(network: str, body: ModeBody, request: Request) -> dict:
     if not body.flags:
         raise HTTPException(400, "flags required")
-    await _conn(request, network).client.set_mode(body.channel, body.flags, *body.args)
+    await _client(request, network).set_mode(body.channel, body.flags, *body.args)
     return {"status": "ok"}
 
 
 @router.post("/topic")
 async def topic(network: str, body: TopicBody, request: Request) -> dict:
-    client = _conn(request, network).client
+    client = _client(request, network)
     if body.topic is None:
         await client.rawmsg("TOPIC", body.channel)
     else:
@@ -130,7 +130,7 @@ async def topic(network: str, body: TopicBody, request: Request) -> dict:
 async def nick(network: str, body: NickBody, request: Request) -> dict:
     if not body.nick:
         raise HTTPException(400, "nick required")
-    await _conn(request, network).client.set_nickname(body.nick)
+    await _client(request, network).set_nickname(body.nick)
     return {"status": "ok"}
 
 
@@ -156,7 +156,7 @@ async def raw(network: str, body: RawBody, request: Request) -> dict:
         raise HTTPException(400, "line required")
     command, args = _parse_raw(line)
     try:
-        await _conn(request, network).client.rawmsg(command, *args)
+        await _client(request, network).rawmsg(command, *args)
     except ProtocolViolation as exc:
         raise HTTPException(400, f"invalid IRC message: {exc}") from exc
     except ValueError as exc:
@@ -177,8 +177,12 @@ def _parse_raw(line: str) -> tuple[str, list[str]]:
 
 async def _run_whois(conn, bus, nick: str) -> None:
     network = conn.name
+    client = conn.client
+    if client is None:
+        await bus.publish(Event(kind="whois", network=network, payload={"nick": nick, "error": "not connected"}))
+        return
     try:
-        info = await conn.client.whois(nick)
+        info = await client.whois(nick)
     except Exception as exc:
         log.warning("whois %s on %s failed: %s", nick, network, exc)
         await bus.publish(Event(kind="whois", network=network, payload={"nick": nick, "error": str(exc)}))
@@ -196,3 +200,10 @@ def _conn(request: Request, name: str):
         return bot.networks[name]
     except KeyError as exc:
         raise HTTPException(404, f"Unknown network {name!r}") from exc
+
+
+def _client(request: Request, name: str):
+    conn = _conn(request, name)
+    if conn.client is None:
+        raise HTTPException(409, f"network {name!r} not connected")
+    return conn.client

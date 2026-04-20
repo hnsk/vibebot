@@ -248,6 +248,7 @@
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("is-active", v.dataset.view === name));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-active", t.dataset.view === name));
     if (name === "modules" || name === "repos" || name === "acl") refreshAdminPanels();
+    if (name === "settings") refreshSettingsPanel();
   }
 
   /* ---------------- auth ---------------- */
@@ -704,10 +705,15 @@
       if (!Array.isArray(lines) || lines.length === 0) return;
       const buf = getBuffer(net, target);
       // Merge history at the front while avoiding duplicates of any live lines
-      // we may already have collected while the fetch was in flight.
-      const liveKeys = new Set(buf.map((l) => `${l.kind}|${l.nick||""}|${l.body||""}`));
+      // we may already have collected while the fetch was in flight. Event lines
+      // carry structured fields in live payloads but a rendered `body` string in
+      // history, so key them on stable identity fields instead of body text.
+      const dedupKey = (l) => l.kind === "event"
+        ? `event|${l.event||""}|${l.channel||""}|${l.user||l.target||""}|${l.old||""}|${l.new||""}|${l.by||""}`
+        : `${l.kind}|${l.nick||""}|${l.body||""}`;
+      const liveKeys = new Set(buf.map(dedupKey));
       const historical = lines
-        .filter((l) => !liveKeys.has(`${l.kind}|${l.nick||""}|${l.body||""}`))
+        .filter((l) => !liveKeys.has(dedupKey(l)))
         .map((l) => Object.assign({}, l, { ts: l.ts ? new Date(l.ts) : new Date() }));
       if (historical.length === 0) return;
       buf.splice(0, 0, ...historical);
@@ -773,13 +779,14 @@
   /* ---------------- admin panels (modules/repos/acl) ---------------- */
   const renderers = {
     module(m) {
-      return `<div class="card">
+      return `<div class="card" data-module-card data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">
         <h3>${escapeHtml(m.repo)}/${escapeHtml(m.name)}</h3>
         <div class="muted">${escapeHtml(m.description || "(no description)")} — ${m.enabled ? "enabled" : "disabled"}</div>
         <div class="actions">
           <button data-action="${m.enabled ? "disable" : "enable"}" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">${m.enabled ? "Disable" : "Enable"}</button>
           <button data-action="reload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Reload</button>
           <button data-action="unload" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Unload</button>
+          <button data-action="open-settings" data-repo="${escapeAttr(m.repo)}" data-name="${escapeAttr(m.name)}">Settings</button>
         </div>
       </div>`;
     },
@@ -833,6 +840,165 @@
 
   function clearCardExtras(card) {
     card.querySelectorAll(".card-error, .card-ok").forEach((n) => n.remove());
+  }
+
+  /* ---------- per-module settings editor (modal overlay) ---------- */
+
+  const moduleSettingsDialog = {
+    repo: null,
+    name: null,
+    declared: false,
+  };
+
+  function getDialogEls() {
+    return {
+      dlg: document.getElementById("module-settings-dialog"),
+      title: document.getElementById("module-settings-title"),
+      sub: document.getElementById("module-settings-sub"),
+      body: document.getElementById("module-settings-body"),
+      feedback: document.getElementById("module-settings-feedback"),
+      save: document.getElementById("module-settings-save"),
+      reload: document.getElementById("module-settings-reload"),
+    };
+  }
+
+  async function openModuleSettings(btn) {
+    const repo = btn.dataset.repo;
+    const name = btn.dataset.name;
+    const els = getDialogEls();
+    if (!els.dlg) return;
+    moduleSettingsDialog.repo = repo;
+    moduleSettingsDialog.name = name;
+    moduleSettingsDialog.declared = false;
+    els.title.textContent = `${repo}/${name}`;
+    els.sub.textContent = "loading…";
+    els.feedback.textContent = "";
+    els.feedback.classList.remove("is-err", "is-ok");
+    els.save.disabled = true;
+    if (els.reload) {
+      els.reload.disabled = false;
+      els.reload.classList.remove("is-ok", "is-err", "is-busy");
+      els.reload.textContent = "Reload";
+    }
+    els.body.innerHTML = `<div class="module-settings-loading">fetching schema…</div>`;
+    if (typeof els.dlg.showModal === "function" && !els.dlg.open) els.dlg.showModal();
+
+    const base = `/api/modules/${encodeURIComponent(repo)}/${encodeURIComponent(name)}/settings`;
+    try {
+      const [schema, current] = await Promise.all([api(base + "/schema"), api(base)]);
+      if (!schema.declared) {
+        els.sub.textContent = "no typed settings declared";
+        els.body.innerHTML = `<div class="module-settings-empty">
+          <div class="module-settings-empty-glyph">∅</div>
+          <div>This module does not declare typed settings.</div>
+          <div class="muted">Modules can expose settings by declaring a schema in <code>settings.py</code>.</div>
+        </div>`;
+        return;
+      }
+      moduleSettingsDialog.declared = true;
+      const description = schema.description || schema.title || "Configure this module's runtime settings.";
+      els.sub.textContent = description;
+      els.body.innerHTML = renderSettingsFormBody(schema, current.values || {});
+      els.save.disabled = false;
+    } catch (err) {
+      els.sub.textContent = "";
+      els.body.innerHTML = `<div class="card-error">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderSettingsFormBody(schema, values) {
+    const props = schema.properties || {};
+    const entries = Object.entries(props);
+    if (entries.length === 0) {
+      return `<div class="module-settings-empty">
+        <div class="module-settings-empty-glyph">∅</div>
+        <div>This module declares a schema but defines no fields.</div>
+      </div>`;
+    }
+    const fields = entries.map(([key, prop]) => {
+      const label = escapeHtml(prop.title || key);
+      const desc = prop.description ? `<span class="module-settings-desc">${escapeHtml(prop.description)}</span>` : "";
+      const value = values[key];
+      const isSecret = prop.secret === true;
+      const type = prop.type;
+      const hasValue = value !== undefined && value !== null && value !== "";
+      const valueTag = isSecret
+        ? (hasValue ? `<span class="module-settings-pill is-secret">set</span>` : `<span class="module-settings-pill is-empty">unset</span>`)
+        : "";
+      let input;
+      let control = "";
+      if (isSecret) {
+        input = `<input type="password" name="${escapeAttr(key)}" placeholder="${hasValue ? "•••• (leave blank to keep current)" : "enter value…"}" autocomplete="new-password">`;
+      } else if (prop.format === "uri" || (type === "string" && key.toLowerCase().includes("url"))) {
+        input = `<input type="url" name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}" placeholder="https://…">`;
+      } else if (type === "integer") {
+        const minAttr = prop.minimum != null ? ` min="${prop.minimum}"` : "";
+        const maxAttr = prop.maximum != null ? ` max="${prop.maximum}"` : "";
+        input = `<input type="number" step="1"${minAttr}${maxAttr} name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}">`;
+      } else if (type === "number") {
+        input = `<input type="number" step="any" name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}">`;
+      } else if (type === "boolean") {
+        control = "switch";
+        input = `<span class="module-settings-switch">
+          <input type="checkbox" name="${escapeAttr(key)}"${value ? " checked" : ""}>
+          <span class="module-settings-switch-track"><span class="module-settings-switch-thumb"></span></span>
+        </span>`;
+      } else {
+        input = `<input type="text" name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}" placeholder="${escapeAttr(prop.default ?? "")}">`;
+      }
+      const typeBadge = `<span class="module-settings-type">${escapeHtml(type || "string")}${isSecret ? " · secret" : ""}</span>`;
+      return `<label class="module-settings-field ${control === "switch" ? "is-switch" : ""}" data-key="${escapeAttr(key)}" data-type="${escapeAttr(type || "string")}" data-secret="${isSecret ? "1" : "0"}">
+        <span class="module-settings-field-head">
+          <span class="module-settings-label">${label}</span>
+          <span class="module-settings-meta">${valueTag}${typeBadge}</span>
+        </span>
+        <span class="module-settings-control">${input}</span>
+        ${desc}
+      </label>`;
+    }).join("");
+    return `<form class="module-settings-form" onsubmit="return false">
+      ${fields}
+    </form>`;
+  }
+
+  async function saveOpenModuleSettings() {
+    const els = getDialogEls();
+    if (!els.dlg || !moduleSettingsDialog.declared) return;
+    const form = els.body.querySelector(".module-settings-form");
+    if (!form) return;
+    const repo = moduleSettingsDialog.repo;
+    const name = moduleSettingsDialog.name;
+    const patch = {};
+    form.querySelectorAll(".module-settings-field").forEach((label) => {
+      const key = label.dataset.key;
+      const type = label.dataset.type;
+      const isSecret = label.dataset.secret === "1";
+      const input = label.querySelector("input");
+      if (!input) return;
+      if (input.type === "checkbox") { patch[key] = input.checked; return; }
+      const raw = input.value;
+      if (isSecret && raw === "") return;
+      if (raw === "" && !isSecret) return;
+      if (type === "integer") { const n = Number.parseInt(raw, 10); if (!Number.isNaN(n)) patch[key] = n; return; }
+      if (type === "number") { const n = Number.parseFloat(raw); if (!Number.isNaN(n)) patch[key] = n; return; }
+      patch[key] = raw;
+    });
+    els.feedback.textContent = "saving…";
+    els.feedback.classList.remove("is-err", "is-ok");
+    els.save.disabled = true;
+    try {
+      await api(
+        `/api/modules/${encodeURIComponent(repo)}/${encodeURIComponent(name)}/settings`,
+        { method: "PUT", body: patch },
+      );
+      els.feedback.textContent = "saved — reload module to apply.";
+      els.feedback.classList.add("is-ok");
+    } catch (err) {
+      els.feedback.textContent = "Error: " + err.message;
+      els.feedback.classList.add("is-err");
+    } finally {
+      els.save.disabled = false;
+    }
   }
 
   async function pullRepo(btn) {
@@ -1269,9 +1435,637 @@
         pushLine(net, target, { kind: "whois", whois: p });
         break;
       }
+      case "settings_changed":
+        // Fire-and-forget: only refresh when the Settings tab is the active view.
+        if (state.view === "settings") refreshSettingsPanel();
+        break;
       default:
         break;
     }
+  }
+
+  /* ---------------- settings view ---------------- */
+  const settings = {
+    data: null,            // full /api/settings snapshot
+    activeNetwork: null,   // selected network name
+  };
+
+  async function refreshSettingsPanel() {
+    try {
+      const data = await api("/api/settings");
+      settings.data = data;
+      const networks = data.networks || [];
+      if (settings.activeNetwork && !networks.some((n) => n.name === settings.activeNetwork)) {
+        settings.activeNetwork = null;
+      }
+      if (!settings.activeNetwork && networks.length > 0) {
+        settings.activeNetwork = networks[0].name;
+      }
+      renderSettingsList();
+      renderSettingsBody();
+      syncGlobalBar();
+    } catch (err) {
+      const list = $("settings-network-list");
+      if (list) list.innerHTML = `<div class="rail-empty">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function syncGlobalBar() {
+    const bar = $("settings-global-bar");
+    const saveBtn = $("settings-save-btn");
+    const pathEl = $("settings-config-path");
+    const dirty = !!(settings.data && settings.data.dirty);
+    const path = (settings.data && settings.data.config_path) || "config.toml";
+    if (bar) bar.classList.toggle("is-dirty", dirty);
+    if (saveBtn) {
+      saveBtn.disabled = !dirty;
+      saveBtn.title = dirty ? `Write runtime config to ${path}` : "No unsaved changes";
+    }
+    if (pathEl) pathEl.textContent = path.split("/").pop() || path;
+  }
+
+  function renderSettingsList() {
+    const list = $("settings-network-list");
+    if (!list) return;
+    const networks = (settings.data && settings.data.networks) || [];
+    if (!networks.length) {
+      list.innerHTML = '<div class="rail-empty">no networks — use + to add</div>';
+      return;
+    }
+    list.innerHTML = "";
+    for (const n of networks) {
+      const row = elt("div", "settings-net-row" + (n.name === settings.activeNetwork ? " is-active" : ""));
+      row.dataset.network = n.name;
+      row.dataset.connected = n.connected ? "true" : "false";
+      const pill = elt("span", "conn-pill " + (n.connected ? "is-up" : "is-down"),
+                       n.connected ? "online" : "offline");
+      const title = elt("span", "settings-net-name", n.name);
+      const meta = elt("span", "settings-net-meta",
+                       n.current_server ? `${n.current_server.host}:${n.current_server.port}` : "—");
+      row.appendChild(pill);
+      row.appendChild(title);
+      row.appendChild(meta);
+      list.appendChild(row);
+    }
+  }
+
+  function syncSettingsHead(net) {
+    const head = $("settings-per-network-actions");
+    const connectBtn = $("settings-connect-btn");
+    const discBtn = $("settings-disconnect-btn");
+    const rmBtn = $("settings-remove-btn");
+    if (!head || !connectBtn || !discBtn || !rmBtn) return;
+    const hasNet = !!net;
+    const connected = !!(net && net.connected);
+    head.classList.toggle("is-connected", hasNet && connected);
+    head.classList.toggle("is-disconnected", hasNet && !connected);
+    connectBtn.disabled = !hasNet || connected;
+    discBtn.disabled = !hasNet || !connected;
+    rmBtn.disabled = !hasNet;
+    if (!hasNet) settingsClearRemoveArm();
+
+    const path = $("settings-config-path");
+    if (path) {
+      path.textContent = (settings.data && settings.data.config_path) || "config.toml";
+    }
+  }
+
+  function renderSettingsBody() {
+    const body = $("settings-body");
+    const title = $("settings-active-title");
+    if (!body || !title) return;
+    const net = (settings.data && settings.data.networks || []).find((n) => n.name === settings.activeNetwork);
+    syncSettingsHead(net);
+    if (!net) {
+      title.textContent = "no network selected";
+      body.innerHTML = '<p class="muted">Pick a network on the left, or use the + button to add one.</p>';
+      return;
+    }
+    title.textContent = net.name;
+    const auth = net.auth || { method: "none" };
+    body.innerHTML = `
+      <form id="settings-identity-form" class="settings-form">
+        <div class="form-grid">
+          <label>Nick <input name="nick" value="${escapeAttr(net.nick || "")}" required></label>
+          <label>Username (ident) <input name="username" value="${escapeAttr(net.username || "")}" placeholder="(same as nick)"></label>
+          <label>Realname <input name="realname" value="${escapeAttr(net.realname || "")}"></label>
+          <label>Hostname <input name="hostname" value="${escapeAttr(net.hostname || "")}" placeholder="(auto)"></label>
+          <label>Protocol
+            <select name="protocol">
+              <option value="ircv3"${net.protocol === "ircv3" ? " selected" : ""}>ircv3</option>
+              <option value="rfc1459"${net.protocol === "rfc1459" ? " selected" : ""}>rfc1459</option>
+            </select>
+          </label>
+          <label>Auth method
+            <select name="auth_method">
+              <option value="none"${auth.method === "none" ? " selected" : ""}>none</option>
+              <option value="sasl"${auth.method === "sasl" ? " selected" : ""}>sasl</option>
+              <option value="q"${auth.method === "q" ? " selected" : ""}>q (quakenet)</option>
+              <option value="nickserv"${auth.method === "nickserv" ? " selected" : ""}>nickserv</option>
+            </select>
+          </label>
+        </div>
+        <div id="settings-auth-extra" class="form-grid"></div>
+        <p class="muted form-hint">
+          Nick applies live. Username, realname, protocol, and auth require a reconnect to take effect.
+        </p>
+        <div class="form-actions">
+          <button type="submit" data-intent="apply">Apply</button>
+          <button type="submit" data-intent="reconnect" id="settings-reconnect-btn">Apply and Reconnect</button>
+        </div>
+      </form>
+
+      <section class="settings-card">
+        <header class="settings-card-head">
+          <h3>Servers</h3>
+          <span class="muted">default is tried first; others are fallbacks</span>
+        </header>
+        <ol class="server-rows" id="settings-server-rows"></ol>
+        <form id="settings-add-server-form" class="inline-form">
+          <input name="host" placeholder="host" required>
+          <input name="port" type="number" value="6697" min="1" max="65535" required>
+          <label class="chk"><input type="checkbox" name="tls" checked> tls</label>
+          <label class="chk"><input type="checkbox" name="tls_verify" checked> verify</label>
+          <label class="chk"><input type="checkbox" name="is_default"> default</label>
+          <button type="submit">Add server</button>
+        </form>
+      </section>
+
+      <section class="settings-card">
+        <header class="settings-card-head">
+          <h3>Channels</h3>
+          <span class="muted">joined on connect; live edits JOIN/PART immediately</span>
+        </header>
+        <ul class="channel-rows" id="settings-channel-rows"></ul>
+        <form id="settings-add-channel-form" class="inline-form">
+          <input name="channel" placeholder="#channel" required>
+          <button type="submit">Add channel</button>
+        </form>
+      </section>
+    `;
+    renderAuthExtra(net.auth || { method: "none" });
+    renderServerRows(net);
+    renderChannelRows(net);
+  }
+
+  function renderAuthExtra(auth) {
+    const box = $("settings-auth-extra");
+    if (!box) return;
+    if (auth.method === "none") { box.innerHTML = ""; return; }
+    if (auth.method === "sasl") {
+      box.innerHTML = `
+        <label>Mechanism
+          <select name="sasl_mechanism">
+            ${["PLAIN","EXTERNAL","SCRAM-SHA-256","SCRAM-SHA-1"].map((m) =>
+              `<option${auth.mechanism === m ? " selected" : ""}>${m}</option>`).join("")}
+          </select>
+        </label>
+        <label>Username <input name="sasl_username" value="${escapeAttr(auth.username || "")}"></label>
+        <label>Password <input name="sasl_password" type="password" value="${escapeAttr(auth.password || "")}"></label>
+        <label>Cert path <input name="sasl_cert_path" value="${escapeAttr(auth.cert_path || "")}" placeholder="(EXTERNAL only)"></label>
+        <label class="chk"><input type="checkbox" name="sasl_required"${auth.required ? " checked" : ""}> required</label>
+      `;
+    } else if (auth.method === "q") {
+      box.innerHTML = `
+        <label>Q user <input name="q_username" value="${escapeAttr(auth.username || "")}" required></label>
+        <label>Q pass <input name="q_password" type="password" value="${escapeAttr(auth.password || "")}" required></label>
+        <label>Service <input name="q_service" value="${escapeAttr(auth.service || "Q@CServe.quakenet.org")}"></label>
+        <label class="chk"><input type="checkbox" name="q_hidehost"${auth.hidehost !== false ? " checked" : ""}> hidehost</label>
+        <label class="chk"><input type="checkbox" name="q_required"${auth.required ? " checked" : ""}> required</label>
+      `;
+    } else if (auth.method === "nickserv") {
+      box.innerHTML = `
+        <label>Username <input name="ns_username" value="${escapeAttr(auth.username || "")}" required></label>
+        <label>Password <input name="ns_password" type="password" value="${escapeAttr(auth.password || "")}" required></label>
+        <label>Service nick <input name="ns_service_nick" value="${escapeAttr(auth.service_nick || "NickServ")}"></label>
+        <label class="chk"><input type="checkbox" name="ns_required"${auth.required ? " checked" : ""}> required</label>
+      `;
+    }
+  }
+
+  function renderServerRows(net) {
+    const ol = $("settings-server-rows");
+    if (!ol) return;
+    ol.innerHTML = "";
+    const servers = net.servers || [];
+    if (!servers.length) {
+      const empty = document.createElement("li");
+      empty.className = "server-row is-empty";
+      empty.innerHTML = `<span class="muted">no servers yet — add one below to enable connect.</span>`;
+      ol.appendChild(empty);
+      return;
+    }
+    servers.forEach((s, i) => {
+      const li = document.createElement("li");
+      li.className = "server-row" + (s.is_default ? " is-default" : "");
+      li.dataset.index = String(i);
+      li.innerHTML = `
+        <span class="server-badge">${s.is_default ? "★ default" : "fallback"}</span>
+        <form class="server-edit-form" data-index="${i}">
+          <input name="host" value="${escapeAttr(s.host)}" required>
+          <input name="port" type="number" min="1" max="65535" value="${s.port}" required>
+          <label class="chk"><input type="checkbox" name="tls"${s.tls ? " checked" : ""}> tls</label>
+          <label class="chk"><input type="checkbox" name="tls_verify"${s.tls_verify ? " checked" : ""}> verify</label>
+          <button type="submit" class="server-save" disabled>Save</button>
+        </form>
+        <span class="server-actions">
+          ${s.is_default ? "" : `<button type="button" data-settings-action="server-default" data-index="${i}">Make default</button>`}
+          <button type="button" data-settings-action="server-remove" data-index="${i}" class="danger">Remove</button>
+        </span>
+      `;
+      ol.appendChild(li);
+      const form = li.querySelector(".server-edit-form");
+      const saveBtn = form.querySelector(".server-save");
+      const initial = JSON.stringify({
+        host: s.host, port: s.port, tls: !!s.tls, tls_verify: !!s.tls_verify,
+      });
+      const checkDirty = () => {
+        const current = JSON.stringify({
+          host: form.elements["host"].value,
+          port: parseInt(form.elements["port"].value || "0", 10),
+          tls: !!form.elements["tls"].checked,
+          tls_verify: !!form.elements["tls_verify"].checked,
+        });
+        saveBtn.disabled = current === initial;
+      };
+      form.addEventListener("input", checkDirty);
+      form.addEventListener("change", checkDirty);
+    });
+  }
+
+  function renderChannelRows(net) {
+    const ul = $("settings-channel-rows");
+    if (!ul) return;
+    ul.innerHTML = "";
+    (net.channels || []).forEach((ch) => {
+      const li = document.createElement("li");
+      li.className = "channel-row";
+      li.innerHTML = `
+        <span class="channel-name">${escapeHtml(ch)}</span>
+        <button type="button" data-settings-action="channel-remove" data-channel="${escapeAttr(ch)}" class="danger">Remove</button>
+      `;
+      ul.appendChild(li);
+    });
+  }
+
+  function buildAuthPayloadFromForm(form) {
+    const method = form.elements["auth_method"].value;
+    if (method === "none") return { method: "none" };
+    if (method === "sasl") {
+      return {
+        method: "sasl",
+        mechanism: form.elements["sasl_mechanism"]?.value || "PLAIN",
+        username: form.elements["sasl_username"]?.value || null,
+        password: form.elements["sasl_password"]?.value || null,
+        cert_path: form.elements["sasl_cert_path"]?.value || null,
+        required: !!form.elements["sasl_required"]?.checked,
+      };
+    }
+    if (method === "q") {
+      return {
+        method: "q",
+        username: form.elements["q_username"].value,
+        password: form.elements["q_password"].value,
+        service: form.elements["q_service"]?.value || "Q@CServe.quakenet.org",
+        hidehost: !!form.elements["q_hidehost"]?.checked,
+        required: !!form.elements["q_required"]?.checked,
+      };
+    }
+    return {
+      method: "nickserv",
+      username: form.elements["ns_username"].value,
+      password: form.elements["ns_password"].value,
+      service_nick: form.elements["ns_service_nick"]?.value || "NickServ",
+      required: !!form.elements["ns_required"]?.checked,
+    };
+  }
+
+  async function settingsApplyIdentity(form, { reconnect = false } = {}) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const body = {
+      nick: form.elements["nick"].value,
+      username: form.elements["username"].value || null,
+      realname: form.elements["realname"].value || null,
+      hostname: form.elements["hostname"].value || null,
+      protocol: form.elements["protocol"].value,
+      auth: buildAuthPayloadFromForm(form),
+      reconnect: false,
+    };
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}`, { method: "PATCH", body });
+      if (reconnect) {
+        await api(`/api/settings/networks/${encodeURIComponent(name)}/reconnect`, { method: "POST" });
+        setStatus(`${name}: applied, reconnecting`, "ok");
+      } else {
+        setStatus(`${name}: identity updated`, "ok");
+      }
+      refreshSettingsPanel();
+    } catch (err) {
+      setStatus(err.message, "err");
+    }
+  }
+
+  async function settingsAddServer(form) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const fd = new FormData(form);
+    const body = {
+      host: fd.get("host"),
+      port: parseInt(fd.get("port") || "6697", 10),
+      tls: !!form.elements["tls"].checked,
+      tls_verify: !!form.elements["tls_verify"].checked,
+      is_default: !!form.elements["is_default"].checked,
+    };
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/servers`, { method: "POST", body });
+      form.reset();
+      setStatus(`${name}: server added`, "ok");
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  async function settingsServerAction(action, index) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    try {
+      if (action === "server-default") {
+        await api(`/api/settings/networks/${encodeURIComponent(name)}/servers/${index}/default`, { method: "POST" });
+      } else if (action === "server-remove") {
+        await api(`/api/settings/networks/${encodeURIComponent(name)}/servers/${index}`, { method: "DELETE" });
+      }
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  async function settingsUpdateServer(form) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const index = parseInt(form.dataset.index, 10);
+    const net = (settings.data && settings.data.networks || []).find((n) => n.name === name);
+    const existing = net && net.servers && net.servers[index];
+    const body = {
+      host: form.elements["host"].value.trim(),
+      port: parseInt(form.elements["port"].value || "6697", 10),
+      tls: !!form.elements["tls"].checked,
+      tls_verify: !!form.elements["tls_verify"].checked,
+      is_default: !!(existing && existing.is_default),
+    };
+    if (!body.host) {
+      setStatus("host required", "err");
+      return;
+    }
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/servers/${index}`, {
+        method: "PATCH", body,
+      });
+      setStatus(`${name}: server updated`, "ok");
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  function normalizeChannelName(raw) {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) return "";
+    return "#&!+".includes(trimmed[0]) ? trimmed : "#" + trimmed;
+  }
+
+  async function settingsAddChannel(form) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const ch = normalizeChannelName(form.elements["channel"].value);
+    if (!ch) return;
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/channels`, {
+        method: "POST", body: { channel: ch },
+      });
+      form.reset();
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  async function settingsRemoveChannel(channel) {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/channels/${encodeURIComponent(channel)}`,
+                { method: "DELETE" });
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  async function settingsConnect() {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/connect`, { method: "POST" });
+      setStatus(`${name}: connecting…`, "ok");
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  async function settingsDisconnect() {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}/disconnect`, { method: "POST" });
+      setStatus(`${name}: disconnecting…`, "ok");
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  let _removeArmTimer = null;
+  function settingsClearRemoveArm() {
+    const rmBtn = $("settings-remove-btn");
+    if (rmBtn) {
+      rmBtn.classList.remove("is-armed");
+      rmBtn.textContent = "Remove network";
+    }
+    if (_removeArmTimer) {
+      clearTimeout(_removeArmTimer);
+      _removeArmTimer = null;
+    }
+  }
+  async function settingsRemoveNetwork() {
+    const name = settings.activeNetwork;
+    if (!name) return;
+    const rmBtn = $("settings-remove-btn");
+    if (!rmBtn) return;
+    if (!rmBtn.classList.contains("is-armed")) {
+      rmBtn.classList.add("is-armed");
+      rmBtn.textContent = `Confirm remove ${name}`;
+      _removeArmTimer = setTimeout(settingsClearRemoveArm, 4000);
+      return;
+    }
+    settingsClearRemoveArm();
+    try {
+      await api(`/api/settings/networks/${encodeURIComponent(name)}`, { method: "DELETE" });
+      settings.activeNetwork = null;
+      refreshSettingsPanel();
+    } catch (err) { setStatus(err.message, "err"); }
+  }
+
+  function settingsShowCreate() {
+    const panel = $("settings-create");
+    const err = $("settings-create-error");
+    const form = $("settings-create-form");
+    if (!panel || !form) return;
+    settings.activeNetwork = null;
+    renderSettingsList();
+    renderSettingsBody();
+    panel.hidden = false;
+    if (err) { err.hidden = true; err.textContent = ""; }
+    form.reset();
+    const first = form.querySelector('input[name="name"]');
+    if (first) first.focus();
+  }
+  function settingsHideCreate() {
+    const panel = $("settings-create");
+    const err = $("settings-create-error");
+    const form = $("settings-create-form");
+    if (panel) panel.hidden = true;
+    if (err) { err.hidden = true; err.textContent = ""; }
+    if (form) form.reset();
+  }
+  async function settingsCreateSubmit(form) {
+    const name = form.elements["name"].value.trim();
+    const nick = form.elements["nick"].value.trim();
+    const err = $("settings-create-error");
+    if (err) { err.hidden = true; err.textContent = ""; }
+    if (!name || !nick) return;
+    try {
+      await api("/api/settings/networks", {
+        method: "POST",
+        body: { name, nick, servers: [], channels: [] },
+      });
+      settings.activeNetwork = name;
+      settingsHideCreate();
+      refreshSettingsPanel();
+    } catch (e) {
+      if (err) {
+        err.textContent = e.message;
+        err.hidden = false;
+      } else {
+        setStatus(e.message, "err");
+      }
+    }
+  }
+
+  async function settingsSaveToDisk() {
+    const btn = $("settings-save-btn");
+    const feedback = $("settings-save-feedback");
+    if (btn) btn.disabled = true;
+    if (feedback) { feedback.textContent = "saving…"; feedback.classList.remove("is-err"); }
+    try {
+      const r = await api("/api/settings/save", { method: "POST" });
+      const stamp = new Date().toLocaleTimeString();
+      const path = r.path || "config.toml";
+      if (feedback) feedback.textContent = `saved ${stamp} → ${path}`;
+      setStatus(`saved → ${path}`, "ok");
+      refreshSettingsPanel();
+    } catch (err) {
+      if (feedback) {
+        feedback.textContent = err.message;
+        feedback.classList.add("is-err");
+      }
+      setStatus(err.message, "err");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function settingsReloadFromDisk() {
+    if (!window.confirm("Discard unsaved runtime edits and reload config.toml from disk?")) return;
+    const btn = $("settings-reload-btn");
+    const feedback = $("settings-save-feedback");
+    if (btn) btn.disabled = true;
+    if (feedback) { feedback.textContent = "reloading…"; feedback.classList.remove("is-err"); }
+    try {
+      const r = await api("/api/settings/reload", { method: "POST" });
+      const stamp = new Date().toLocaleTimeString();
+      const path = (r && r.config_path) || "config.toml";
+      if (feedback) feedback.textContent = `reloaded ${stamp} ← ${path}`;
+      setStatus(`reloaded ← ${path}`, "ok");
+      refreshSettingsPanel();
+      loadNetworks();
+    } catch (err) {
+      if (feedback) {
+        feedback.textContent = err.message;
+        feedback.classList.add("is-err");
+      }
+      setStatus(err.message, "err");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function wireSettingsUI() {
+    const list = $("settings-network-list");
+    if (list) {
+      list.addEventListener("click", (ev) => {
+        const row = ev.target.closest(".settings-net-row");
+        if (!row) return;
+        settings.activeNetwork = row.dataset.network;
+        settingsHideCreate();
+        settingsClearRemoveArm();
+        renderSettingsList();
+        renderSettingsBody();
+      });
+    }
+    const addNetBtn = $("settings-add-network");
+    if (addNetBtn) addNetBtn.addEventListener("click", settingsShowCreate);
+    const cancelCreate = $("settings-create-cancel");
+    if (cancelCreate) cancelCreate.addEventListener("click", settingsHideCreate);
+    const connectBtn = $("settings-connect-btn");
+    if (connectBtn) connectBtn.addEventListener("click", settingsConnect);
+    const discBtn = $("settings-disconnect-btn");
+    if (discBtn) discBtn.addEventListener("click", settingsDisconnect);
+    const rmBtn = $("settings-remove-btn");
+    if (rmBtn) rmBtn.addEventListener("click", settingsRemoveNetwork);
+    const saveBtn = $("settings-save-btn");
+    if (saveBtn) saveBtn.addEventListener("click", settingsSaveToDisk);
+    const reloadBtn = $("settings-reload-btn");
+    if (reloadBtn) reloadBtn.addEventListener("click", settingsReloadFromDisk);
+
+    document.addEventListener("click", (ev) => {
+      const rm = $("settings-remove-btn");
+      if (rm && rm.classList.contains("is-armed") && !ev.target.closest("#settings-remove-btn")) {
+        settingsClearRemoveArm();
+      }
+    });
+
+    document.addEventListener("change", (ev) => {
+      if (ev.target && ev.target.name === "auth_method" && ev.target.closest("#settings-identity-form")) {
+        const method = ev.target.value;
+        const stub = { method };
+        renderAuthExtra(stub);
+      }
+    });
+
+    document.addEventListener("submit", (ev) => {
+      if (ev.target.id === "settings-identity-form") {
+        ev.preventDefault();
+        const reconnect = !!(ev.submitter && ev.submitter.dataset.intent === "reconnect");
+        settingsApplyIdentity(ev.target, { reconnect });
+      }
+      else if (ev.target.id === "settings-add-server-form") { ev.preventDefault(); settingsAddServer(ev.target); }
+      else if (ev.target.id === "settings-add-channel-form") { ev.preventDefault(); settingsAddChannel(ev.target); }
+      else if (ev.target.id === "settings-create-form") { ev.preventDefault(); settingsCreateSubmit(ev.target); }
+      else if (ev.target.classList && ev.target.classList.contains("server-edit-form")) {
+        ev.preventDefault();
+        settingsUpdateServer(ev.target);
+      }
+    });
+
+    document.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-settings-action]");
+      if (!b) return;
+      const action = b.dataset.settingsAction;
+      if (action === "channel-remove") settingsRemoveChannel(b.dataset.channel);
+      else if (action === "server-default" || action === "server-remove") {
+        settingsServerAction(action, parseInt(b.dataset.index, 10));
+      }
+    });
   }
 
   /* ---------------- websocket ---------------- */
@@ -1294,9 +2088,6 @@
     sock.onmessage = (m) => {
       let payload = null;
       try { payload = JSON.parse(m.data); } catch { return; }
-      // mirror raw to events log
-      const log = $("events-log");
-      if (log) log.textContent = (m.data + "\n" + log.textContent).slice(0, 16000);
       routeEvent(payload);
     };
     sock.onclose = () => {
@@ -1641,6 +2432,9 @@
           await api("/api/acl/" + encodeURIComponent(b.dataset.id), { method: "DELETE" });
         } else if (["enable", "disable", "reload", "unload"].includes(action)) {
           await api("/api/modules/" + action, { method: "POST", body: { repo: b.dataset.repo, name: b.dataset.name } });
+        } else if (action === "open-settings") {
+          await openModuleSettings(b);
+          return;
         } else { return; }
         preserveScroll(refreshAdminPanels);
       } catch (err) { setStatus(err.message, "err"); }
@@ -1730,8 +2524,76 @@
   }
 
   /* ---------------- boot ---------------- */
+  async function reloadOpenModule() {
+    const els = getDialogEls();
+    const repo = moduleSettingsDialog.repo;
+    const name = moduleSettingsDialog.name;
+    if (!repo || !name || !els.reload) return;
+    const btn = els.reload;
+    btn.disabled = true;
+    btn.classList.remove("is-ok", "is-err");
+    btn.classList.add("is-busy");
+    btn.textContent = "reloading…";
+    els.feedback.textContent = `reloading ${repo}/${name}…`;
+    els.feedback.classList.remove("is-err", "is-ok");
+    try {
+      await api("/api/modules/reload", { method: "POST", body: { repo, name } });
+      btn.classList.remove("is-busy");
+      btn.classList.add("is-ok");
+      btn.textContent = "✓ reloaded";
+      els.feedback.textContent = `${repo}/${name} reloaded.`;
+      els.feedback.classList.add("is-ok");
+      preserveScroll(refreshAdminPanels);
+      setTimeout(() => {
+        btn.classList.remove("is-ok");
+        btn.textContent = "Reload";
+        btn.disabled = false;
+      }, 1800);
+    } catch (err) {
+      btn.classList.remove("is-busy");
+      btn.classList.add("is-err");
+      btn.textContent = "✗ failed";
+      els.feedback.textContent = "Reload failed: " + err.message;
+      els.feedback.classList.add("is-err");
+      setTimeout(() => {
+        btn.classList.remove("is-err");
+        btn.textContent = "Reload";
+        btn.disabled = false;
+      }, 2400);
+    }
+  }
+
+  function wireModuleSettingsDialog() {
+    const saveBtn = document.getElementById("module-settings-save");
+    const reloadBtn = document.getElementById("module-settings-reload");
+    const dlg = document.getElementById("module-settings-dialog");
+    if (saveBtn) saveBtn.addEventListener("click", saveOpenModuleSettings);
+    if (reloadBtn) reloadBtn.addEventListener("click", reloadOpenModule);
+    if (!dlg) return;
+    dlg.addEventListener("close", () => {
+      moduleSettingsDialog.repo = null;
+      moduleSettingsDialog.name = null;
+      moduleSettingsDialog.declared = false;
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-settings-close]")) { dlg.close(); return; }
+      // click on backdrop (dialog element itself) closes
+      if (ev.target === dlg) dlg.close();
+    });
+    dlg.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      const tag = ev.target && ev.target.tagName;
+      if (tag === "INPUT" && ev.target.type !== "checkbox") {
+        ev.preventDefault();
+        saveOpenModuleSettings();
+      }
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     wireUI();
+    wireSettingsUI();
+    wireModuleSettingsDialog();
     updateAuthBadge();
     if (!state.token) {
       setStatus("Set an API token to populate panels.", "err");

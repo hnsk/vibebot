@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel, Field
+
 from vibebot.core.events import Event
 from vibebot.modules.base import Module
 
 
+class PingSettings(BaseModel):
+    response: str = Field(default="pong", description="Reply sent when someone says !ping.")
+
+
 class PingModule(Module):
     name = "ping"
-    description = "Reply 'pong' to !ping."
+    description = "Reply to !ping with a configurable response."
+    Settings = PingSettings
 
     async def on_message(self, event: Event) -> None:
         message: str = event.get("message", "")
@@ -20,4 +27,4 @@ class PingModule(Module):
         conn = self.bot.networks.get(event.network)
         if conn is None:
             return
-        await conn.send_message(reply_to, "pong")
+        await conn.send_message(reply_to, self.settings.response)

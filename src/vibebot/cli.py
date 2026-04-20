@@ -33,7 +33,7 @@ def serve(config_path: Path) -> None:
     config = load_config(config_path)
     logging.basicConfig(level=config.bot.log_level)
 
-    bot = VibeBot(config)
+    bot = VibeBot(config, config_path=config_path)
     asyncio.run(bot.run())
 
 

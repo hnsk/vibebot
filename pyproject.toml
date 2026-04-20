@@ -26,6 +26,7 @@ dependencies = [
     "pydantic>=2.6",
     "click>=8.1",
     "tomli>=2.0; python_version < '3.11'",
+    "tomlkit>=0.13",
 ]
 
 [project.optional-dependencies]

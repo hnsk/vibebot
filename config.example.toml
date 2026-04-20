@@ -6,6 +6,10 @@
 database = "data/vibebot.db"
 # Where module git repos are cloned.
 modules_dir = "data/modules"
+# Per-module scratch/data directory root. Each loaded module gets an auto-created
+# subdirectory at <modules_data_dir>/<repo>/<name>/ that it may use for its own
+# SQLite files, caches, or temp data.
+modules_data_dir = "data/modules-data"
 log_level = "INFO"
 
 [api]
@@ -35,13 +39,23 @@ tokens = ["change-me-please"]
 # ---------------------------------------------------------------------------
 
 # Modern network with SASL PLAIN (Libera, Ergo, etc.).
+# A network can list multiple servers. Exactly one must be is_default = true;
+# the others are tried in order if the default is unreachable.
 [[networks]]
 name = "libera"
-host = "irc.libera.chat"
-port = 6697
-tls = true
 nick = "vibebot"
 channels = ["#vibebot-test"]
+
+  [[networks.servers]]
+  host = "irc.libera.chat"
+  port = 6697
+  tls = true
+  is_default = true
+
+  [[networks.servers]]
+  host = "eu.irc.libera.chat"
+  port = 6697
+  tls = true
 
   [networks.auth]
   method = "sasl"

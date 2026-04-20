@@ -11,8 +11,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from vibebot.core.events import Event
@@ -109,9 +110,39 @@ class ModuleManager:
         cls = _find_module_class(python_module)
         if cls is None:
             raise ImportError(f"Module {repo}/{name} has no Module subclass")
-        config = await self._load_config(repo, name)
-        instance = cls(self.bot, config=config)
+        stored = await self._load_config(repo, name)
+        instance = cls(self.bot, config=stored)
         instance.name = instance.name or name
+        instance._repo = repo
+        instance._name = name
+
+        settings_error: str | None = None
+        if cls.Settings is not None:
+            try:
+                instance.settings = cls.Settings(**stored)
+            except ValidationError as exc:
+                settings_error = _format_validation_error(exc)
+                log.error("Module %s/%s invalid settings: %s", repo, name, settings_error)
+            else:
+                if not stored:
+                    # Persist resolved defaults so the UI has concrete values to edit.
+                    from vibebot.modules.settings import dump_for_storage
+                    defaults = dump_for_storage(instance.settings)
+                    await self._upsert_state(
+                        repo, name, loaded=True, enabled=True, config_json=defaults
+                    )
+
+        if settings_error is not None:
+            loaded = LoadedModule(
+                repo=repo, name=name, instance=instance, python_module=python_module, enabled=False
+            )
+            self._loaded[(repo, name)] = loaded
+            await self._upsert_state(
+                repo, name, loaded=True, enabled=False, last_error=settings_error
+            )
+            log.info("Loaded module %s/%s (disabled: invalid settings)", repo, name)
+            return loaded
+
         try:
             await instance.on_load()
         except Exception:
@@ -119,7 +150,7 @@ class ModuleManager:
         loaded = LoadedModule(repo=repo, name=name, instance=instance, python_module=python_module)
         loaded.job_ids = await self._register_scheduled(repo, name, instance)
         self._loaded[(repo, name)] = loaded
-        await self._upsert_state(repo, name, loaded=True, enabled=True)
+        await self._upsert_state(repo, name, loaded=True, enabled=True, last_error=None)
         log.info("Loaded module %s/%s", repo, name)
         return loaded
 
@@ -169,6 +200,11 @@ class ModuleManager:
     # ---------- bus bridges ----------
 
     async def _on_message(self, event: Event) -> None:
+        # Skip pydle-synthesized outbound echoes — otherwise a module that
+        # replies to its own trigger loops forever.
+        own = self.bot._own_nick_of(event.network)
+        if own and event.get("source") == own:
+            return
         for loaded in self._loaded.values():
             if not loaded.enabled:
                 continue
@@ -200,7 +236,18 @@ class ModuleManager:
             except json.JSONDecodeError:
                 return {}
 
-    async def _upsert_state(self, repo: str, name: str, *, loaded: bool, enabled: bool) -> None:
+    _UNSET = object()
+
+    async def _upsert_state(
+        self,
+        repo: str,
+        name: str,
+        *,
+        loaded: bool,
+        enabled: bool,
+        config_json: Any = _UNSET,
+        last_error: Any = _UNSET,
+    ) -> None:
         async with self.bot.db.session() as s:
             state = (
                 await s.execute(
@@ -209,12 +256,58 @@ class ModuleManager:
                     )
                 )
             ).scalar_one_or_none()
+            serialized = self._UNSET if config_json is self._UNSET else (
+                None if config_json is None else json.dumps(config_json)
+            )
             if state is None:
-                s.add(ModuleState(repo_name=repo, module_name=name, loaded=loaded, enabled=enabled))
+                row = ModuleState(
+                    repo_name=repo, module_name=name, loaded=loaded, enabled=enabled
+                )
+                if serialized is not self._UNSET:
+                    row.config_json = serialized
+                if last_error is not self._UNSET:
+                    row.last_error = last_error
+                s.add(row)
             else:
                 state.loaded = loaded
                 state.enabled = enabled
+                if serialized is not self._UNSET:
+                    state.config_json = serialized
+                if last_error is not self._UNSET:
+                    state.last_error = last_error
             await s.commit()
+
+    async def save_settings(self, repo: str, name: str, values: dict[str, Any]) -> None:
+        """Persist a validated settings dict. Preserves loaded/enabled flags and
+        does not trigger reload — operator must call reload to pick up changes.
+        """
+        async with self.bot.db.session() as s:
+            state = (
+                await s.execute(
+                    select(ModuleState).where(
+                        ModuleState.repo_name == repo, ModuleState.module_name == name
+                    )
+                )
+            ).scalar_one_or_none()
+            serialized = json.dumps(values)
+            if state is None:
+                s.add(
+                    ModuleState(
+                        repo_name=repo,
+                        module_name=name,
+                        loaded=False,
+                        enabled=False,
+                        config_json=serialized,
+                    )
+                )
+            else:
+                state.config_json = serialized
+                state.last_error = None
+            await s.commit()
+
+    async def get_stored_settings(self, repo: str, name: str) -> dict[str, Any]:
+        """Read the raw stored settings dict for a module (empty if unset)."""
+        return await self._load_config(repo, name)
 
     async def _register_scheduled(self, repo: str, name: str, instance: Module) -> list[str]:
         job_ids: list[str] = []
@@ -224,6 +317,14 @@ class ModuleManager:
             self.bot.scheduler.add_job(wrapped, trigger=task.trigger, job_id=job_id)
             job_ids.append(job_id)
         return job_ids
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "<root>"
+        parts.append(f"{loc}: {err.get('msg', 'invalid')}")
+    return "; ".join(parts)
 
 
 def _find_module_class(python_module: ModuleType) -> type[Module] | None:

@@ -59,6 +59,30 @@
   </div>
 </section>
 
+<dialog id="module-settings-dialog" class="module-settings-dialog" aria-labelledby="module-settings-title">
+  <div class="module-settings-shell">
+    <header class="module-settings-head">
+      <div>
+        <span class="module-settings-eyebrow">Module settings</span>
+        <h2 id="module-settings-title" class="module-settings-title">—</h2>
+        <p class="module-settings-sub" id="module-settings-sub"></p>
+      </div>
+      <button type="button" class="module-settings-close" data-settings-close aria-label="Close">✕</button>
+    </header>
+    <div class="module-settings-body" id="module-settings-body">
+      <div class="muted">loading…</div>
+    </div>
+    <footer class="module-settings-foot">
+      <span class="module-settings-feedback" id="module-settings-feedback" role="status"></span>
+      <div class="module-settings-foot-actions">
+        <button type="button" class="ghost-btn" data-settings-close>Close</button>
+        <button type="button" class="module-settings-save" id="module-settings-save" disabled>Save</button>
+        <button type="button" class="module-settings-reload" id="module-settings-reload" disabled>Reload</button>
+      </div>
+    </footer>
+  </div>
+</dialog>
+
 <section class="view view-repos" data-view="repos">
   <div class="panel">
     <h2 class="panel-title">Module repositories</h2>
@@ -85,10 +109,59 @@
   </div>
 </section>
 
-<section class="view view-events" data-view="events">
-  <div class="panel">
-    <h2 class="panel-title">Live event stream</h2>
-    <pre id="events-log" aria-live="polite"></pre>
+<section class="view view-settings" data-view="settings">
+  <div class="settings-global-bar" id="settings-global-bar">
+    <div class="settings-global-copy">
+      <strong>Runtime configuration</strong>
+      <span class="muted" id="settings-global-status">
+        Save writes all networks, servers, channels, and repos to
+        <code id="settings-config-path">config.toml</code>.
+        Reload discards unsaved edits and restores what is on disk.
+      </span>
+    </div>
+    <div class="settings-global-actions">
+      <button type="button" id="settings-save-btn" disabled>Save config.toml</button>
+      <button type="button" id="settings-reload-btn" class="ghost-btn danger">Reload config.toml</button>
+      <span class="settings-save-feedback" id="settings-save-feedback" role="status"></span>
+    </div>
+  </div>
+  <div class="settings-workspace">
+  <aside class="rail rail-left settings-rail">
+    <div class="rail-head">
+      <span class="rail-title">networks</span>
+      <button type="button" class="ghost-btn" id="settings-add-network" title="Add network">+</button>
+    </div>
+    <div class="rail-scroll" id="settings-network-list">
+      <div class="rail-empty">loading…</div>
+    </div>
+  </aside>
+  <section class="settings-main">
+    <div class="settings-head">
+      <h2 class="panel-title" id="settings-active-title">no network selected</h2>
+      <div class="settings-head-actions" id="settings-per-network-actions">
+        <button type="button" class="conn-btn is-connect" id="settings-connect-btn">Connect</button>
+        <button type="button" class="conn-btn is-disconnect" id="settings-disconnect-btn">Disconnect</button>
+        <button type="button" class="ghost-btn danger" id="settings-remove-btn">Remove network</button>
+      </div>
+    </div>
+    <div class="settings-create" id="settings-create" hidden>
+      <form id="settings-create-form" class="settings-form">
+        <div class="form-grid">
+          <label>Network name <input name="name" required placeholder="ircnet"></label>
+          <label>Bot nick <input name="nick" required placeholder="vibebot"></label>
+        </div>
+        <p class="muted">Servers and channels are added after the network is created.</p>
+        <div class="settings-create-error" id="settings-create-error" hidden></div>
+        <div class="form-actions">
+          <button type="submit">Create</button>
+          <button type="button" class="ghost-btn" id="settings-create-cancel">Cancel</button>
+        </div>
+      </form>
+    </div>
+    <div class="settings-body" id="settings-body">
+      <p class="muted">Pick a network on the left, or use the + button to add one.</p>
+    </div>
+  </section>
   </div>
 </section>
 {% endblock %}

@@ -78,4 +78,5 @@ class ModuleState(Base):
     loaded: Mapped[bool] = mapped_column(default=False)
     enabled: Mapped[bool] = mapped_column(default=False)
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
