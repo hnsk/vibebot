@@ -7,6 +7,7 @@ import contextlib
 import ipaddress
 import logging
 import socket
+import ssl
 from typing import Any
 
 import pydle
@@ -110,6 +111,7 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         self._vb_host_hidden = asyncio.Event()
         self._vb_disconnected = asyncio.Event()
         self._vb_expected_disconnect = False
+        self._vb_handle_task: asyncio.Task[None] | None = None
 
     async def _publish(self, kind: str, **payload: Any) -> None:
         await self._bus.publish(Event(kind=kind, network=self._network_name, payload=payload))
@@ -441,6 +443,25 @@ class _Client(pydle.Client, SASLSupport):  # type: ignore[misc, valid-type]
         except (TypeError, ValueError):
             self._mode_limit = None
 
+    async def handle_forever(self) -> None:  # type: ignore[override]
+        # pydle spawns this coroutine fire-and-forget in Client.connect()
+        # (pydle/client.py:128), storing no reference. During shutdown,
+        # disconnect() closes the SSL writer while recv() is still pending;
+        # the close_notify race surfaces as ssl.SSLError
+        # ("APPLICATION_DATA_AFTER_CLOSE_NOTIFY") or a plain ConnectionError.
+        # Without a parent to await the task, asyncio reports "Task exception
+        # was never retrieved". Swallow the expected shutdown-race errors and
+        # stash the task so NetworkConnection.stop() can await it.
+        self._vb_handle_task = asyncio.current_task()
+        try:
+            await super().handle_forever()
+        except (ssl.SSLError, ConnectionError, OSError) as exc:
+            log.debug(
+                "%s: handle_forever closed during shutdown: %r",
+                self._network_name,
+                exc,
+            )
+
     async def on_disconnect(self, expected: bool) -> None:  # type: ignore[override]
         # Signal + publish FIRST so _run's wait always wakes, even if super
         # raises. With RECONNECT_ON_ERROR=False, super just logs and returns,
@@ -679,6 +700,15 @@ class NetworkConnection:
         if client is not None and client.connected:
             with contextlib.suppress(Exception):
                 await client.disconnect(expected=True)
+        if client is not None:
+            handle_task = client._vb_handle_task
+            if handle_task is not None and not handle_task.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(handle_task), timeout=2.0)
+                if not handle_task.done():
+                    handle_task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await handle_task
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
