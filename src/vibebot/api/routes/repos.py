@@ -30,17 +30,19 @@ class RepoPatch(BaseModel):
 async def list_repos(request: Request) -> list[dict]:
     bot = request.app.state.bot
     repos = await bot.repos.list_repos()
-    return [
-        {
+    out: list[dict] = []
+    for r in repos:
+        deps = await bot.deps.status(r.name)
+        out.append({
             "name": r.name,
             "url": r.url,
             "branch": r.branch,
             "subdir": r.subdir,
             "enabled": r.enabled,
             "last_pulled_at": r.last_pulled_at.isoformat() if r.last_pulled_at else None,
-        }
-        for r in repos
-    ]
+            "deps": deps,
+        })
+    return out
 
 
 @router.post("")
@@ -93,3 +95,39 @@ async def pull_repo(name: str, request: Request) -> dict:
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"status": "ok", "path": str(path)}
+
+
+@router.get("/{name}/requirements")
+async def get_requirements(name: str, request: Request) -> dict:
+    bot = request.app.state.bot
+    repo = await bot.repos.get_repo(name)
+    if repo is None:
+        raise HTTPException(404, f"Unknown repo {name!r}")
+    status = await bot.deps.status(name)
+    content: str | None = None
+    if status.get("path"):
+        try:
+            from pathlib import Path as _Path
+            content = _Path(status["path"]).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(500, f"cannot read requirements: {exc}") from exc
+    return {**status, "content": content}
+
+
+@router.post("/{name}/install-requirements")
+async def install_requirements(name: str, request: Request, force: bool = False) -> dict:
+    bot = request.app.state.bot
+    repo = await bot.repos.get_repo(name)
+    if repo is None:
+        raise HTTPException(404, f"Unknown repo {name!r}")
+    result = await bot.deps.ensure_installed(name, force=force)
+    return {
+        "ok": result.ok,
+        "skipped": result.skipped,
+        "reason": result.reason,
+        "requirements_path": result.requirements_path,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "duration": result.duration,
+        "returncode": result.returncode,
+    }

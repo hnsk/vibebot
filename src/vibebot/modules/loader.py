@@ -93,6 +93,12 @@ class ModuleManager:
             qualified = f"{BUILTIN_PACKAGE}.{name}"
             return await self._load_python_path(repo, name, qualified)
         await self.bot.repos.clone_or_pull(repo)
+        if self.bot.config.bot.auto_install_requirements:
+            result = await self.bot.deps.ensure_installed(repo)
+            if not result.ok:
+                raise RuntimeError(
+                    f"requirements install failed for {repo}: {result.stderr[-500:] or result.reason}"
+                )
         repo_row = await self.bot.repos.get_repo(repo)
         if repo_row is None:
             raise FileNotFoundError(f"Unknown repo {repo!r}")

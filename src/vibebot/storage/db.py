@@ -20,6 +20,9 @@ from vibebot.storage.models import Base
 _ADD_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("module_state", "last_error", "TEXT"),
     ("repos", "subdir", "VARCHAR(255)"),
+    ("repos", "deps_hash", "VARCHAR(64)"),
+    ("repos", "deps_installed_at", "DATETIME"),
+    ("repos", "deps_last_error", "TEXT"),
 )
 
 

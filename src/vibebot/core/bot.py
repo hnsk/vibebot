@@ -36,12 +36,14 @@ class VibeBot:
         self.history.attach(self.bus)
 
         # Late imports to keep module import-time graph small.
+        from vibebot.modules.deps import RepoDepsInstaller
         from vibebot.modules.loader import ModuleManager
         from vibebot.modules.registry import RepoRegistry
         from vibebot.scheduler.jobs import SchedulerService
         from vibebot.scheduler.service import ScheduleService
 
         self.repos = RepoRegistry(self.db, default_repos=config.repos, modules_dir=config.bot.modules_dir)
+        self.deps = RepoDepsInstaller(self.repos, self.db, timeout_s=config.bot.pip_timeout_s)
         self.scheduler = SchedulerService(database_url=self.db.url)
         self.schedules = ScheduleService(self, self.scheduler, self.db, self.acl)
         self.modules = ModuleManager(bot=self)

@@ -21,6 +21,8 @@ class BotConfig(BaseModel):
     modules_dir: str = "data/modules"
     modules_data_dir: str = "data/modules-data"
     log_level: str = "INFO"
+    auto_install_requirements: bool = False
+    pip_timeout_s: float = Field(600.0, ge=10.0, le=3600.0)
 
 
 class ApiConfig(BaseModel):

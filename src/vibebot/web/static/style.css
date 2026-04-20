@@ -1118,6 +1118,37 @@ body {
   background: color-mix(in srgb, var(--ok) 10%, var(--bg-deep));
   animation: fadeOut 4s ease 1s forwards;
 }
+.card-output {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-soft);
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-height: 14rem;
+  overflow: auto;
+}
+.pill-deps {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--bg-deep);
+  vertical-align: middle;
+}
+.pill-deps-clean   { color: var(--ok);  border-color: var(--ok); }
+.pill-deps-stale   { color: var(--warn, #c69); border-color: var(--warn, #c69); }
+.pill-deps-error   { color: var(--err); border-color: var(--err); }
+.pill-deps-missing { color: var(--muted); border-color: var(--line); }
 @keyframes fadeOut {
   to { opacity: 0; transform: translateY(-2px); }
 }

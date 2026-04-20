@@ -68,6 +68,9 @@ class Repo(Base):
     subdir: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deps_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deps_installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deps_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ModuleState(Base):

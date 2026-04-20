@@ -856,12 +856,35 @@
     },
     repo(r) {
       const subdir = r.subdir ? `<div class="muted">subdir: <code>${escapeHtml(r.subdir)}</code></div>` : "";
+      const deps = r.deps || {};
+      let depsPill = "";
+      let depsButton = "";
+      if (deps.exists) {
+        const stateLabels = {
+          clean: ["deps", "clean"],
+          stale: ["deps", "stale"],
+          missing: ["deps", "none"],
+          error: ["deps", "error"],
+        };
+        const pair = stateLabels[deps.state] || ["deps", deps.state || "?"];
+        const title = deps.path ? `requirements: ${deps.path}` : "no requirements.txt";
+        depsPill = `<span class="pill pill-deps pill-deps-${escapeAttr(deps.state || "unknown")}" title="${escapeAttr(title)}">${escapeHtml(pair[0])}: ${escapeHtml(pair[1])}</span>`;
+        if (deps.state !== "missing") {
+          const label = deps.state === "clean" ? "Reinstall deps" : "Install deps";
+          depsButton = `<button data-action="install-deps" data-name="${escapeAttr(r.name)}">${label}</button>`;
+        }
+      }
+      const errBlock = deps.last_error
+        ? `<pre class="card-error">${escapeHtml(deps.last_error)}</pre>`
+        : "";
       return `<div class="card">
-        <h3>${escapeHtml(r.name)}</h3>
+        <h3>${escapeHtml(r.name)} ${depsPill}</h3>
         <div class="muted">${escapeHtml(r.url)} @ ${escapeHtml(r.branch)}${r.enabled ? "" : " (disabled)"}</div>
         ${subdir}
+        ${errBlock}
         <div class="actions">
           <button data-action="pull-repo" data-name="${escapeAttr(r.name)}">Pull</button>
+          ${depsButton}
           <button data-action="edit-repo" data-name="${escapeAttr(r.name)}" data-url="${escapeAttr(r.url)}" data-branch="${escapeAttr(r.branch)}" data-subdir="${escapeAttr(r.subdir || "")}">Edit</button>
           <button data-action="delete-repo" data-name="${escapeAttr(r.name)}">Delete</button>
         </div>
@@ -1519,6 +1542,56 @@
       els.feedback.classList.add("is-err");
     } finally {
       els.save.disabled = false;
+    }
+  }
+
+  async function installDeps(btn) {
+    const card = btn.closest(".card");
+    if (!card) return;
+    clearCardExtras(card);
+    const origLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "installing…";
+    try {
+      const res = await api(
+        "/api/repos/" + encodeURIComponent(btn.dataset.name) + "/install-requirements",
+        { method: "POST" },
+      );
+      if (res && res.ok && res.skipped) {
+        const ok = document.createElement("div");
+        ok.className = "card-ok";
+        ok.textContent = `skipped · ${res.reason || "up-to-date"}`;
+        card.appendChild(ok);
+        setStatus(`deps skipped for ${btn.dataset.name}: ${res.reason}`, "ok");
+      } else if (res && res.ok) {
+        const ok = document.createElement("div");
+        ok.className = "card-ok";
+        ok.textContent = `installed · ${res.duration.toFixed(1)}s`;
+        card.appendChild(ok);
+        if (res.stdout) {
+          const pre = document.createElement("pre");
+          pre.className = "card-output";
+          pre.textContent = res.stdout;
+          card.appendChild(pre);
+        }
+        setStatus(`deps installed for ${btn.dataset.name}`, "ok");
+      } else {
+        const pre = document.createElement("pre");
+        pre.className = "card-error";
+        pre.textContent = (res && (res.stderr || res.reason)) || "install failed";
+        card.appendChild(pre);
+        setStatus(`deps install failed: ${btn.dataset.name}`, "err");
+      }
+    } catch (err) {
+      const pre = document.createElement("pre");
+      pre.className = "card-error";
+      pre.textContent = err.body || err.message;
+      card.appendChild(pre);
+      setStatus(`deps install failed: ${btn.dataset.name}`, "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = origLabel;
+      preserveScroll(refreshAdminPanels);
     }
   }
 
@@ -3033,6 +3106,10 @@
       try {
         if (action === "pull-repo") {
           await pullRepo(b);
+          return;
+        }
+        if (action === "install-deps") {
+          await installDeps(b);
           return;
         }
         if (action === "open-schedules") {
