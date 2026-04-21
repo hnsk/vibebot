@@ -24,3 +24,4 @@ After the next start the bot clones the repo; enable a module via the web UI
 |------------|------------------------------------------------------|
 | `remindme` | Let users schedule personal reminders via chat. Syntax: `!remindme <when> <message>` (e.g. `5m`, `1h30m`, `1 day`). |
 | `urltitle` | Auto-post page titles for URLs seen in chat. Skips images/video/binaries, prefers `og:title`, caches fetched titles in SQLite (refetched after 10 min). |
+| `youtubeinfo` | Post YouTube video info (title, channel, duration, age) when a `youtube.com` / `youtu.be` / `shorts` / `live` URL is seen. Requires a YouTube Data API v3 key. Caches per video ID (default 60 min). Uses only IRC bold — no colour codes. |
