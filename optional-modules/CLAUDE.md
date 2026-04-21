@@ -14,3 +14,9 @@ Rules for anyone (human or agent) touching modules in this directory.
   and registered dynamically in `on_load` using the current settings value.
   Do not hardcode the prefix; operators must be able to rename it from the
   admin UI.
+
+# Output styling of modules
+- IRC Color codes can be used it output. Have to use color combinations that work with BOTH dark and light mode
+- IRC Bold can be used in output
+- Default output should be styled in a meaningful and easy user readable way relevant to information
+- Avoid excessive use of special UTF-8 characters as not all terminals can render them correctly.
