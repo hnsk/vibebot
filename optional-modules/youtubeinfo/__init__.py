@@ -64,10 +64,19 @@ class YouTubeInfoSettings(BaseModel):
     reply_format: str = Field(
         default="\x02{title}\x02 \u2014 {channel} \u00b7 {duration} \u00b7 {age}",
         description=(
-            "Template for the channel reply. Placeholders: {title}, "
-            "{channel}, {duration}, {age}. IRC bold: \\x02...\\x02. "
-            "Do not use colour codes — users run mixed light/dark clients."
+            "Template for the channel reply. Use the toolbar to insert IRC "
+            "formatting (bold/italic/underline/colour) — keep colour choices "
+            "legible on both dark and light clients."
         ),
+        json_schema_extra={
+            "ui_widget": "irc_format",
+            "ui_variables": {
+                "title": "Video title.",
+                "channel": "Channel name.",
+                "duration": "Runtime, e.g. 4:12 or 1:02:30.",
+                "age": "How long ago the video was published.",
+            },
+        },
     )
     fetch_timeout_seconds: float = Field(
         default=8.0,

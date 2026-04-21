@@ -2276,6 +2276,247 @@ dialog label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0
   }
 }
 
+/* ============================================================
+   IRC-formatting composite widget (used for string fields
+   with json_schema_extra ui_widget == "irc_format")
+   ============================================================ */
+.irc-format-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+}
+.irc-format-toolbar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.4rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.irc-btn {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 0.6);
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  transition: background var(--tx), border-color var(--tx), color var(--tx);
+  min-width: 1.9rem;
+}
+.irc-btn:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+.irc-btn:active { transform: translateY(1px); }
+.irc-btn-colour { display: inline-flex; align-items: center; gap: 0.25rem; }
+.irc-btn-caret { font-size: 0.65rem; opacity: 0.7; }
+
+.irc-format-textarea {
+  width: 100%;
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+  outline: none;
+  resize: vertical;
+  min-height: 3.4rem;
+  transition: border-color var(--tx), box-shadow var(--tx), background var(--tx);
+  white-space: pre-wrap;
+}
+.irc-format-textarea:focus {
+  border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.irc-format-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.irc-format-preview-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.irc-format-preview {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: calc(var(--radius) * 0.6);
+  padding: 0.5rem 0.7rem;
+  min-height: 1.45em;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.irc-run { }
+.irc-run.irc-b    { font-weight: 700; }
+.irc-run.irc-i    { font-style: italic; }
+.irc-run.irc-u    { text-decoration: underline; }
+.irc-run.irc-mono { font-family: var(--font-mono, ui-monospace, Menlo, monospace); }
+.irc-run.irc-empty { color: var(--muted); font-style: italic; }
+
+.irc-colour-popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 28px -12px rgba(0, 0, 0, 0.55);
+  min-width: 280px;
+}
+.irc-colour-popover[hidden] { display: none; }
+.irc-colour-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.irc-colour-row-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  width: 1.6rem;
+}
+.irc-colour-swatches {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+.irc-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: transform var(--tx), box-shadow var(--tx), border-color var(--tx);
+}
+.irc-swatch:hover { transform: scale(1.15); }
+.irc-swatch.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.irc-swatch.is-none {
+  background: repeating-linear-gradient(45deg, var(--panel-2) 0 3px, var(--line) 3px 6px);
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 18px;
+  text-align: center;
+}
+.irc-colour-apply-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+.irc-colour-apply {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: calc(var(--radius) * 0.6);
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+.irc-colour-apply:hover { filter: brightness(1.08); }
+.irc-colour-hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  flex: 1 1 16ch;
+  line-height: 1.35;
+}
+
+.irc-format-vars {
+  font-size: 0.76rem;
+  color: var(--muted);
+  border: 1px dashed var(--line-soft);
+  border-radius: calc(var(--radius) * 0.6);
+  padding: 0.35rem 0.55rem;
+}
+.irc-format-vars > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  list-style: none;
+}
+.irc-format-vars > summary::-webkit-details-marker { display: none; }
+.irc-format-vars > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 0.35rem;
+  transition: transform var(--tx);
+}
+.irc-format-vars[open] > summary::before { transform: rotate(90deg); }
+.irc-format-vars ul {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.7rem;
+  align-items: baseline;
+}
+.irc-var {
+  font: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.irc-var code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--accent);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  transition: background var(--tx);
+}
+.irc-var:hover code {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.irc-var-desc { color: var(--muted); line-height: 1.4; }
+
+.module-settings-field.is-irc-format .module-settings-control {
+  display: block;
+  width: 100%;
+}
+
 @media (max-width: 720px) {
   .settings-workspace { grid-template-columns: 1fr; }
   .settings-rail { display: none; }

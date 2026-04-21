@@ -1409,6 +1409,287 @@
     card.querySelectorAll(".card-error, .card-ok").forEach((n) => n.remove());
   }
 
+  /* ---------- IRC-formatting widget (used inside settings fields) ---------- */
+
+  // mIRC 16-colour palette. Index → { hex, label }. Applied inline in the
+  // preview; not pulled from CSS vars so colours look right on both themes.
+  const IRC_COLOURS = [
+    { hex: "#ffffff", label: "white" },
+    { hex: "#000000", label: "black" },
+    { hex: "#00007f", label: "blue" },
+    { hex: "#009300", label: "green" },
+    { hex: "#ff0000", label: "red" },
+    { hex: "#7f0000", label: "brown" },
+    { hex: "#9c009c", label: "magenta" },
+    { hex: "#fc7f00", label: "orange" },
+    { hex: "#ffff00", label: "yellow" },
+    { hex: "#00fc00", label: "light green" },
+    { hex: "#009393", label: "cyan" },
+    { hex: "#00ffff", label: "light cyan" },
+    { hex: "#0000fc", label: "light blue" },
+    { hex: "#ff00ff", label: "pink" },
+    { hex: "#7f7f7f", label: "grey" },
+    { hex: "#d2d2d2", label: "light grey" },
+  ];
+
+  const IRC_ESCAPE_RE = /[\x00-\x1f]/g;
+  const IRC_UNESCAPE_RE = /\\x([0-9a-fA-F]{2})/g;
+
+  function ircEscapeForEditing(raw) {
+    return String(raw ?? "").replace(IRC_ESCAPE_RE, (c) => {
+      const code = c.charCodeAt(0);
+      return "\\x" + code.toString(16).padStart(2, "0");
+    });
+  }
+
+  function ircUnescapeForStorage(text) {
+    return String(text ?? "").replace(IRC_UNESCAPE_RE, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
+  }
+
+  function renderIrcPreview(raw) {
+    const s = String(raw ?? "");
+    let bold = false, italic = false, underline = false;
+    let reverse = false, mono = false;
+    let fg = null, bg = null;
+    const parts = [];
+    let buf = "";
+    const flush = () => {
+      if (!buf) return;
+      const styles = [];
+      const classes = ["irc-run"];
+      if (bold) classes.push("irc-b");
+      if (italic) classes.push("irc-i");
+      if (underline) classes.push("irc-u");
+      if (mono) classes.push("irc-mono");
+      const fgHex = fg != null ? IRC_COLOURS[fg].hex : null;
+      const bgHex = bg != null ? IRC_COLOURS[bg].hex : null;
+      if (reverse) {
+        const swapFg = bgHex ?? "var(--surface-2, #1a1a1a)";
+        const swapBg = fgHex ?? "var(--fg, #eee)";
+        styles.push(`color:${swapFg}`);
+        styles.push(`background-color:${swapBg}`);
+      } else {
+        if (fgHex) styles.push(`color:${fgHex}`);
+        if (bgHex) styles.push(`background-color:${bgHex}`);
+      }
+      const styleAttr = styles.length ? ` style="${styles.join(";")}"` : "";
+      parts.push(`<span class="${classes.join(" ")}"${styleAttr}>${escapeHtml(buf)}</span>`);
+      buf = "";
+    };
+    for (let i = 0; i < s.length; i += 1) {
+      const c = s[i];
+      const code = c.charCodeAt(0);
+      if (code === 0x02) { flush(); bold = !bold; continue; }
+      if (code === 0x1d) { flush(); italic = !italic; continue; }
+      if (code === 0x1f) { flush(); underline = !underline; continue; }
+      if (code === 0x16) { flush(); reverse = !reverse; continue; }
+      if (code === 0x11) { flush(); mono = !mono; continue; }
+      if (code === 0x0f) {
+        flush();
+        bold = italic = underline = reverse = mono = false;
+        fg = bg = null;
+        continue;
+      }
+      if (code === 0x03) {
+        flush();
+        let j = i + 1;
+        let fgDigits = "";
+        while (j < s.length && fgDigits.length < 2 && s[j] >= "0" && s[j] <= "9") {
+          fgDigits += s[j];
+          j += 1;
+        }
+        if (fgDigits === "") {
+          fg = null;
+          bg = null;
+          i = j - 1;
+          continue;
+        }
+        let bgDigits = "";
+        if (s[j] === ",") {
+          let k = j + 1;
+          while (k < s.length && bgDigits.length < 2 && s[k] >= "0" && s[k] <= "9") {
+            bgDigits += s[k];
+            k += 1;
+          }
+          if (bgDigits !== "") j = k;
+        }
+        const fgN = parseInt(fgDigits, 10);
+        fg = fgN >= 0 && fgN <= 15 ? fgN : null;
+        if (bgDigits !== "") {
+          const bgN = parseInt(bgDigits, 10);
+          bg = bgN >= 0 && bgN <= 15 ? bgN : null;
+        }
+        i = j - 1;
+        continue;
+      }
+      buf += c;
+    }
+    flush();
+    const html = parts.join("");
+    return html || `<span class="irc-run irc-empty">(empty)</span>`;
+  }
+
+  function insertIrcAtCursor(textarea, before, after) {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? textarea.value.length;
+    const v = textarea.value;
+    const selected = v.slice(start, end);
+    const inserted = before + selected + (after ?? "");
+    textarea.value = v.slice(0, start) + inserted + v.slice(end);
+    const caret = start + before.length + selected.length;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+  }
+
+  function ircEscape(byte) {
+    return "\\x" + byte.toString(16).padStart(2, "0");
+  }
+
+  const IRC_TOOLBAR = [
+    { op: "wrap", key: "b",     byte: 0x02, label: "B",     title: "Bold (Ctrl+B)",      style: "font-weight:700" },
+    { op: "wrap", key: "i",     byte: 0x1d, label: "I",     title: "Italic (Ctrl+I)",    style: "font-style:italic" },
+    { op: "wrap", key: "u",     byte: 0x1f, label: "U",     title: "Underline (Ctrl+U)", style: "text-decoration:underline" },
+    { op: "wrap", key: "rev",   byte: 0x16, label: "Rev",   title: "Reverse video" },
+    { op: "wrap", key: "mono",  byte: 0x11, label: "Mono",  title: "Monospace",          style: "font-family:var(--mono, ui-monospace, Menlo, monospace)" },
+    { op: "colour" },
+    { op: "reset", byte: 0x0f, label: "↺ Reset", title: "Clear all formatting" },
+  ];
+
+  function renderIrcFormatField(key, prop, value) {
+    const defaultStr = typeof prop.default === "string" ? prop.default : "";
+    const initial = value != null ? String(value) : defaultStr;
+    const escaped = ircEscapeForEditing(initial);
+    const previewHtml = renderIrcPreview(initial);
+    const toolbarHtml = IRC_TOOLBAR.map((btn) => {
+      if (btn.op === "colour") {
+        return `<button type="button" class="irc-btn irc-btn-colour" data-op="colour" title="Colour foreground / background">🎨 <span class="irc-btn-caret">▾</span></button>`;
+      }
+      if (btn.op === "reset") {
+        return `<button type="button" class="irc-btn" data-op="reset" title="${escapeAttr(btn.title)}">${escapeHtml(btn.label)}</button>`;
+      }
+      const styleAttr = btn.style ? ` style="${escapeAttr(btn.style)}"` : "";
+      return `<button type="button" class="irc-btn" data-op="wrap" data-byte="${btn.byte}" title="${escapeAttr(btn.title)}"${styleAttr}>${escapeHtml(btn.label)}</button>`;
+    }).join("");
+    const vars = prop.ui_variables && typeof prop.ui_variables === "object" ? prop.ui_variables : null;
+    let varsHtml = "";
+    if (vars) {
+      const rows = Object.entries(vars).map(([name, desc]) => (
+        `<li><button type="button" class="irc-var" data-var="${escapeAttr(name)}"><code>{${escapeHtml(name)}}</code></button><span class="irc-var-desc">${escapeHtml(desc)}</span></li>`
+      )).join("");
+      varsHtml = `<details class="irc-format-vars">
+        <summary>Available variables</summary>
+        <ul>${rows}</ul>
+      </details>`;
+    }
+    const swatchesFg = IRC_COLOURS.map((c, idx) => (
+      `<button type="button" class="irc-swatch" data-role="fg" data-idx="${idx}" title="${escapeAttr(idx + " · " + c.label)}" style="background:${c.hex}"></button>`
+    )).join("");
+    const swatchesBg = IRC_COLOURS.map((c, idx) => (
+      `<button type="button" class="irc-swatch" data-role="bg" data-idx="${idx}" title="${escapeAttr(idx + " · " + c.label)}" style="background:${c.hex}"></button>`
+    )).join("");
+    const swatchesNone = `<button type="button" class="irc-swatch is-none" data-role="bg" data-idx="none" title="no background">∅</button>`;
+    const popoverHtml = `<div class="irc-colour-popover" hidden>
+      <div class="irc-colour-row">
+        <span class="irc-colour-row-label">FG</span>
+        <span class="irc-colour-swatches">${swatchesFg}</span>
+      </div>
+      <div class="irc-colour-row">
+        <span class="irc-colour-row-label">BG</span>
+        <span class="irc-colour-swatches">${swatchesNone}${swatchesBg}</span>
+      </div>
+      <div class="irc-colour-apply-row">
+        <button type="button" class="irc-colour-apply" data-op="colour-apply">Insert</button>
+        <span class="irc-colour-hint">Pick FG (required), BG optional. Verify legibility on both light and dark clients.</span>
+      </div>
+    </div>`;
+    return `<div class="irc-format-editor" data-key="${escapeAttr(key)}">
+      <div class="irc-format-toolbar">${toolbarHtml}${popoverHtml}</div>
+      <textarea class="irc-format-textarea" name="${escapeAttr(key)}" rows="2" spellcheck="false" autocomplete="off">${escapeHtml(escaped)}</textarea>
+      <div class="irc-format-preview-wrap">
+        <span class="irc-format-preview-label">Preview</span>
+        <div class="irc-format-preview">${previewHtml}</div>
+      </div>
+      ${varsHtml}
+    </div>`;
+  }
+
+  function updateIrcPreview(editor) {
+    const ta = editor.querySelector(".irc-format-textarea");
+    const preview = editor.querySelector(".irc-format-preview");
+    if (!ta || !preview) return;
+    const raw = ircUnescapeForStorage(ta.value);
+    preview.innerHTML = renderIrcPreview(raw);
+  }
+
+  function bindIrcFormatEditor(editor) {
+    const ta = editor.querySelector(".irc-format-textarea");
+    if (!ta) return;
+    ta.addEventListener("input", () => updateIrcPreview(editor));
+    const popover = editor.querySelector(".irc-colour-popover");
+    const pickState = { fg: null, bg: null };
+    const syncSwatchSel = () => {
+      editor.querySelectorAll(".irc-swatch").forEach((el) => {
+        const role = el.dataset.role;
+        const idxAttr = el.dataset.idx;
+        const active = role === "fg"
+          ? (pickState.fg != null && String(pickState.fg) === idxAttr)
+          : (idxAttr === "none" ? pickState.bg == null : (pickState.bg != null && String(pickState.bg) === idxAttr));
+        el.classList.toggle("is-active", active);
+      });
+    };
+    editor.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("[data-op], [data-role], [data-var]");
+      if (!btn || !editor.contains(btn)) return;
+      if (btn.dataset.var) {
+        ev.preventDefault();
+        insertIrcAtCursor(ta, "{" + btn.dataset.var + "}", "");
+        updateIrcPreview(editor);
+        return;
+      }
+      if (btn.dataset.role) {
+        ev.preventDefault();
+        if (btn.dataset.role === "fg") {
+          pickState.fg = parseInt(btn.dataset.idx, 10);
+        } else {
+          pickState.bg = btn.dataset.idx === "none" ? null : parseInt(btn.dataset.idx, 10);
+        }
+        syncSwatchSel();
+        return;
+      }
+      const op = btn.dataset.op;
+      if (!op) return;
+      ev.preventDefault();
+      if (op === "wrap") {
+        const byte = parseInt(btn.dataset.byte, 10);
+        const marker = ircEscape(byte);
+        insertIrcAtCursor(ta, marker, marker);
+      } else if (op === "reset") {
+        insertIrcAtCursor(ta, ircEscape(0x0f), "");
+      } else if (op === "colour") {
+        if (popover) {
+          popover.hidden = !popover.hidden;
+          if (!popover.hidden) syncSwatchSel();
+        }
+      } else if (op === "colour-apply") {
+        if (pickState.fg == null) return;
+        const fgStr = String(pickState.fg).padStart(2, "0");
+        const bgStr = pickState.bg != null ? "," + String(pickState.bg).padStart(2, "0") : "";
+        const prefix = ircEscape(0x03) + fgStr + bgStr;
+        const suffix = ircEscape(0x0f);
+        insertIrcAtCursor(ta, prefix, suffix);
+        if (popover) popover.hidden = true;
+      }
+      updateIrcPreview(editor);
+    });
+  }
+
+  function bindIrcFormatEditors(root) {
+    if (!root) return;
+    root.querySelectorAll(".irc-format-editor").forEach((ed) => bindIrcFormatEditor(ed));
+  }
+
   /* ---------- per-module settings editor (modal overlay) ---------- */
 
   const moduleSettingsDialog = {
@@ -1466,6 +1747,7 @@
       const description = schema.description || schema.title || "Configure this module's runtime settings.";
       els.sub.textContent = description;
       els.body.innerHTML = renderSettingsFormBody(schema, current.values || {});
+      bindIrcFormatEditors(els.body);
       els.save.disabled = false;
     } catch (err) {
       els.sub.textContent = "";
@@ -1496,6 +1778,9 @@
       let control = "";
       if (isSecret) {
         input = `<input type="password" name="${escapeAttr(key)}" placeholder="${hasValue ? "•••• (leave blank to keep current)" : "enter value…"}" autocomplete="new-password">`;
+      } else if (type === "string" && prop.ui_widget === "irc_format") {
+        control = "irc_format";
+        input = renderIrcFormatField(key, prop, value);
       } else if (prop.format === "uri" || (type === "string" && key.toLowerCase().includes("url"))) {
         input = `<input type="url" name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}" placeholder="https://…">`;
       } else if (type === "integer") {
@@ -1514,7 +1799,9 @@
         input = `<input type="text" name="${escapeAttr(key)}" value="${escapeAttr(value ?? "")}" placeholder="${escapeAttr(prop.default ?? "")}">`;
       }
       const typeBadge = `<span class="module-settings-type">${escapeHtml(type || "string")}${isSecret ? " · secret" : ""}</span>`;
-      return `<label class="module-settings-field ${control === "switch" ? "is-switch" : ""}" data-key="${escapeAttr(key)}" data-type="${escapeAttr(type || "string")}" data-secret="${isSecret ? "1" : "0"}">
+      const controlClass = control === "switch" ? "is-switch" : (control === "irc_format" ? "is-irc-format" : "");
+      const uiWidgetAttr = control === "irc_format" ? ` data-ui-widget="irc_format"` : "";
+      return `<label class="module-settings-field ${controlClass}" data-key="${escapeAttr(key)}" data-type="${escapeAttr(type || "string")}" data-secret="${isSecret ? "1" : "0"}"${uiWidgetAttr}>
         <span class="module-settings-field-head">
           <span class="module-settings-label">${label}</span>
           <span class="module-settings-meta">${valueTag}${typeBadge}</span>
@@ -1540,6 +1827,12 @@
       const key = label.dataset.key;
       const type = label.dataset.type;
       const isSecret = label.dataset.secret === "1";
+      if (label.dataset.uiWidget === "irc_format") {
+        const ta = label.querySelector(".irc-format-textarea");
+        if (!ta) return;
+        patch[key] = ircUnescapeForStorage(ta.value);
+        return;
+      }
       const input = label.querySelector("input");
       if (!input) return;
       if (input.type === "checkbox") { patch[key] = input.checked; return; }

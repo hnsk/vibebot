@@ -80,11 +80,24 @@ class TwitterInfoSettings(BaseModel):
             "{text}{engagement}{reply}{media}{quoted}"
         ),
         description=(
-            "Template for the channel reply. Placeholders: {handle}, "
-            "{name}, {verified}, {age}, {text}, {engagement}, {reply}, "
-            "{media}, {quoted}. IRC bold: \\x02...\\x02. Do not use colour "
-            "codes — users run mixed light/dark clients."
+            "Template for the channel reply. Use the toolbar to insert IRC "
+            "formatting (bold/italic/underline/colour) — keep colour choices "
+            "legible on both dark and light clients."
         ),
+        json_schema_extra={
+            "ui_widget": "irc_format",
+            "ui_variables": {
+                "handle": "Twitter handle (without @).",
+                "name": "Display name.",
+                "verified": "Verified badge marker (empty if not verified).",
+                "age": "How long ago the tweet was posted (e.g. 5m, 2h, 3d).",
+                "text": "Tweet body.",
+                "engagement": "Likes / retweets summary (empty if disabled).",
+                "reply": "In-reply-to marker (empty if not a reply).",
+                "media": "Attached-media marker (empty if none).",
+                "quoted": "Quoted-tweet summary (empty if none).",
+            },
+        },
     )
     fetch_timeout_seconds: float = Field(
         default=8.0,
